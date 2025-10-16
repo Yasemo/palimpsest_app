@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Palimpsest - PR Content Management</title>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cookie&family=Libre+Franklin:wght@400;500;600;700&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
+    
+    <!-- Feather Icons -->
+    <script src="https://unpkg.com/feather-icons"></script>
+    
+    <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+    <div class="app">
+        <!-- Header with navigation tabs -->
+        <header class="header">
+            <div class="header-content">
+                <div class="header-top">
+                    <div class="user-actions"></div>
+                    <div class="branding">
+                        <h1 class="logo">Palimpsest</h1>
+                        <!-- <p class="tagline">PR Content Management Platform</p> -->
+                    </div>
+                    <button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode">
+                        <i data-feather="sun" class="theme-icon sun-icon"></i>
+                        <i data-feather="moon" class="theme-icon moon-icon"></i>
+                    </button>
+                </div>
+            </div>
+            <nav class="tabs" id="navigation">
+                <a href="#/integrations" class="tab" data-tab="integrations">
+                    <i data-feather="settings" class="tab-icon"></i>
+                    <span>Integrations</span>
+                </a>
+                <a href="#/sources" class="tab" data-tab="sources">
+                    <i data-feather="database" class="tab-icon"></i>
+                    <span>Sources</span>
+                </a>
+                <a href="#/queries" class="tab" data-tab="queries">
+                    <i data-feather="search" class="tab-icon"></i>
+                    <span>Queries</span>
+                </a>
+                <a href="#/ai" class="tab" data-tab="ai">
+                    <i data-feather="cpu" class="tab-icon"></i>
+                    <span>AI</span>
+                </a>
+                <a href="#/content" class="tab" data-tab="content">
+                    <i data-feather="file-text" class="tab-icon"></i>
+                    <span>Content</span>
+                </a>
+                <a href="#/outputs" class="tab" data-tab="outputs">
+                    <i data-feather="archive" class="tab-icon"></i>
+                    <span>Outputs</span>
+                </a>
+            </nav>
+        </header>
+
+        <!-- Main content area -->
+        <main class="main-content" id="app-content">
+            <!-- Dynamic content loads here -->
+        </main>
+
+        <!-- Modal container -->
+        <div class="modal-overlay" id="modal-overlay" style="display: none;">
+            <div class="modal" id="modal">
+                <div class="modal-header">
+                    <h2 id="modal-title"></h2>
+                    <button class="modal-close" id="modal-close">&times;</button>
+                </div>
+                <div class="modal-body" id="modal-body"></div>
+            </div>
+        </div>
+
+        <!-- Loading indicator -->
+        <div class="loading-overlay" id="loading-overlay" style="display: none;">
+            <div class="spinner"></div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script type="module" src="/js/api.js"></script>
+    <script type="module" src="/js/router.js"></script>
+    <script type="module" src="/js/components/integrations.js"></script>
+    <script type="module" src="/js/components/sources.js"></script>
+    <script type="module" src="/js/components/queries.js"></script>
+    <script type="module" src="/js/components/ai.js"></script>
+    <script type="module" src="/js/components/content.js"></script>
+    <script type="module" src="/js/components/outputs.js"></script>
+    <script type="module" src="/js/app.js"></script>
+    
+    <!-- Initialize Feather Icons and Dark Mode -->
+    <script>
+      // Initialize Feather Icons
+      feather.replace();
+      
+      // Dark Mode Functionality
+      const themeToggle = document.getElementById('theme-toggle');
+      const prefersDarkScheme = window.matchMedia('(prefers-color-scheme: dark)');
+      
+      // Check for saved theme preference or default to system preference
+      const currentTheme = localStorage.getItem('theme');
+      
+      if (currentTheme === 'dark') {
+        document.body.classList.add('dark-mode');
+      } else if (currentTheme === 'light') {
+        document.body.classList.remove('dark-mode');
+      } else if (prefersDarkScheme.matches) {
+        document.body.classList.add('dark-mode');
+      }
+      
+      // Toggle theme
+      themeToggle.addEventListener('click', function() {
+        document.body.classList.toggle('dark-mode');
+        
+        const theme = document.body.classList.contains('dark-mode') ? 'dark' : 'light';
+        localStorage.setItem('theme', theme);
+      });
+      
+      // Re-initialize icons after dynamic content loads
+      document.addEventListener('DOMContentLoaded', function() {
+        feather.replace();
+      });
+      
+      // Watch for DOM changes to re-initialize icons in dynamic content
+      const observer = new MutationObserver(function() {
+        feather.replace();
+      });
+      
+      observer.observe(document.getElementById('app-content'), {
+        childList: true,
+        subtree: true
+      });
+    </script>
+</body>
+</html>
