@@ -1,9 +1,51 @@
 import { db } from "../db/client.ts";
 import { openrouterIntegration } from "../integrations/openrouter.ts";
+import { config } from "../config.ts";
 
 export async function handleContentRoutes(req: Request, pathname: string): Promise<Response> {
   const url = new URL(req.url);
   const pathParts = pathname.split("/").filter(Boolean);
+
+  // GET /api/content/editor-config - Get content editor default model
+  if (req.method === "GET" && pathParts.length === 3 && pathParts[2] === "editor-config") {
+    return new Response(JSON.stringify({
+      defaultModel: config.ai.defaultContentEditorModel
+    }), {
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  // POST /api/content - Create new content directly
+  if (req.method === "POST" && pathParts.length === 2) {
+    try {
+      const body = await req.json();
+      const { content } = body;
+
+      if (!content) {
+        return new Response(
+          JSON.stringify({ error: "Missing required field: content" }),
+          { status: 400, headers: { "Content-Type": "application/json" } }
+        );
+      }
+
+      const result = await db.query(
+        `INSERT INTO content (content, created_at)
+         VALUES ($1, NOW())
+         RETURNING *`,
+        [content]
+      );
+
+      return new Response(JSON.stringify(result.rows[0]), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      });
+    } catch (error) {
+      return new Response(JSON.stringify({ error: (error as Error).message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  }
 
   // GET /api/content - List all content with optional filters
   if (req.method === "GET" && pathParts.length === 2) {
@@ -137,11 +179,11 @@ export async function handleContentRoutes(req: Request, pathname: string): Promi
     try {
       const id = pathParts[2];
       const body = await req.json();
-      const { message } = body;
+      const { message, currentContent, model } = body;
 
-      if (!message) {
+      if (!message || !currentContent) {
         return new Response(
-          JSON.stringify({ error: "Missing required field: message" }),
+          JSON.stringify({ error: "Missing required fields: message, currentContent" }),
           { status: 400, headers: { "Content-Type": "application/json" } }
         );
       }
@@ -159,56 +201,127 @@ export async function handleContentRoutes(req: Request, pathname: string): Promi
       const content = contentResult.rows[0] as any;
       const chatHistory = content.chat_history || [];
 
-      // Get AI config
+      // Get AI config for temperature and fallback model
       const configResult = await db.query("SELECT * FROM ai_config WHERE id = 1");
       const aiConfig = configResult.rows[0] as any;
 
-      // Build conversation context
-      const currentContent = content.edited_content || content.content;
-      const systemPrompt = `You are helping edit and refine content. The current content is:\n\n${currentContent}\n\nHelp the user make improvements based on their requests.`;
+      // Use provided model or fall back to config
+      const modelToUse = model || aiConfig.model;
 
-      // Construct messages array with chat history
-      const messages = [
-        { role: "system", content: systemPrompt },
-        ...chatHistory,
-        { role: "user", content: message },
-      ];
+      // Build system prompt with current content state
+      const systemPrompt = `You are an AI assistant helping the user refine and improve their content. The user is currently working on the following content:
 
-      // Build the full user prompt for OpenRouter
-      let conversationText = systemPrompt + "\n\n";
+---
+${currentContent}
+---
+
+Provide helpful suggestions, edits, and improvements based on the user's requests. Be concise and actionable.`;
+
+      // Build conversation history for context
+      let conversationText = "";
       for (const msg of chatHistory) {
         conversationText += `${msg.role}: ${msg.content}\n\n`;
       }
       conversationText += `user: ${message}`;
 
-      // Call OpenRouter
+      // Call OpenRouter with current content context
       const aiResponse = await openrouterIntegration.execute({
-        model: aiConfig.model,
+        model: modelToUse,
         systemPrompt: systemPrompt,
         userPrompt: conversationText,
-        temperature: aiConfig.temperature,
+        temperature: aiConfig.temperature || 0.7,
       });
 
-      // Update chat history
+      // Update chat history only (don't modify content)
       const updatedChatHistory = [
         ...chatHistory,
         { role: "user", content: message },
         { role: "assistant", content: aiResponse.content },
       ];
 
-      // Update content with new chat history and optionally edited content
-      const updateResult = await db.query(
-        `UPDATE content 
-         SET chat_history = $1, edited_content = $2
-         WHERE id = $3 
-         RETURNING *`,
-        [JSON.stringify(updatedChatHistory), aiResponse.content, id]
+      // Save chat history to database
+      await db.query(
+        `UPDATE content SET chat_history = $1 WHERE id = $2`,
+        [JSON.stringify(updatedChatHistory), id]
       );
 
       return new Response(JSON.stringify({
-        content: updateResult.rows[0],
         response: aiResponse.content,
+        chatHistory: updatedChatHistory,
       }), {
+        headers: { "Content-Type": "application/json" },
+      });
+    } catch (error) {
+      return new Response(JSON.stringify({ error: (error as Error).message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  }
+
+  // POST /api/content/:id/clear-chat - Clear chat history
+  if (req.method === "POST" && pathParts.length === 4 && pathParts[3] === "clear-chat") {
+    try {
+      const id = pathParts[2];
+
+      // Clear chat history by setting it to empty array
+      const result = await db.query(
+        `UPDATE content SET chat_history = $1 WHERE id = $2 RETURNING *`,
+        [JSON.stringify([]), id]
+      );
+
+      if (result.rows.length === 0) {
+        return new Response(JSON.stringify({ error: "Content not found" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      return new Response(JSON.stringify({ success: true }), {
+        headers: { "Content-Type": "application/json" },
+      });
+    } catch (error) {
+      return new Response(JSON.stringify({ error: (error as Error).message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  }
+
+  // POST /api/content/:id/save-variant - Save current content as a new content card
+  if (req.method === "POST" && pathParts.length === 4 && pathParts[3] === "save-variant") {
+    try {
+      const id = pathParts[2];
+      const body = await req.json();
+      const { content: newContent } = body;
+
+      if (!newContent) {
+        return new Response(
+          JSON.stringify({ error: "Missing required field: content" }),
+          { status: 400, headers: { "Content-Type": "application/json" } }
+        );
+      }
+
+      // Get original content for reference
+      const originalResult = await db.query("SELECT * FROM content WHERE id = $1", [id]);
+
+      if (originalResult.rows.length === 0) {
+        return new Response(JSON.stringify({ error: "Original content not found" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      // Create new content card
+      const result = await db.query(
+        `INSERT INTO content (content, source_content_id, created_at)
+         VALUES ($1, $2, NOW())
+         RETURNING *`,
+        [newContent, id]
+      );
+
+      return new Response(JSON.stringify(result.rows[0]), {
+        status: 201,
         headers: { "Content-Type": "application/json" },
       });
     } catch (error) {

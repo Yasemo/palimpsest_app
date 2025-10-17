@@ -171,10 +171,17 @@ class API {
     });
   }
 
-  async chatWithContent(id, message) {
+  async chatWithContent(id, message, currentContent, model) {
     return this.request(`/api/content/${id}/chat`, {
       method: 'POST',
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ message, currentContent, model }),
+    });
+  }
+
+  async saveContentVariant(id, content) {
+    return this.request(`/api/content/${id}/save-variant`, {
+      method: 'POST',
+      body: JSON.stringify({ content }),
     });
   }
 

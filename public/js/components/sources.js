@@ -126,7 +126,7 @@ function showSourceTypeModal() {
         
         <div class="source-type-cards">
           <div class="source-type-card" data-type="perplexity">
-            <div class="source-type-icon">🔍</div>
+            <div class="source-type-icon"><i data-feather="search"></i></div>
             <h4>Perplexity</h4>
             <p>AI-powered web search for gathering current information and research</p>
             <button class="btn-primary btn-sm" onclick="window.selectSourceType('perplexity')">
@@ -135,21 +135,21 @@ function showSourceTypeModal() {
           </div>
           
           <div class="source-type-card disabled">
-            <div class="source-type-icon">📰</div>
+            <div class="source-type-icon"><i data-feather="rss"></i></div>
             <h4>RSS Feed</h4>
             <p>Monitor RSS feeds for updates and new content</p>
             <span class="badge badge-secondary">Coming Soon</span>
           </div>
           
           <div class="source-type-card disabled">
-            <div class="source-type-icon">🐦</div>
+            <div class="source-type-icon"><i data-feather="twitter"></i></div>
             <h4>Social Media</h4>
             <p>Track mentions and hashtags on social platforms</p>
             <span class="badge badge-secondary">Coming Soon</span>
           </div>
           
           <div class="source-type-card disabled">
-            <div class="source-type-icon">📡</div>
+            <div class="source-type-icon"><i data-feather="radio"></i></div>
             <h4>News API</h4>
             <p>Access news articles from various sources worldwide</p>
             <span class="badge badge-secondary">Coming Soon</span>

@@ -2,19 +2,29 @@
 class Router {
   constructor() {
     this.routes = new Map();
+    this.cleanupHandlers = new Map();
     this.currentRoute = null;
     
     window.addEventListener('hashchange', () => this.handleRoute());
     window.addEventListener('load', () => this.handleRoute());
   }
 
-  register(path, handler) {
+  register(path, handler, cleanupHandler = null) {
     this.routes.set(path, handler);
+    if (cleanupHandler) {
+      this.cleanupHandlers.set(path, cleanupHandler);
+    }
   }
 
   handleRoute() {
     const hash = window.location.hash.slice(1) || '/integrations';
     const [route] = hash.split('?');
+    
+    // Call cleanup handler for previous route
+    if (this.currentRoute && this.cleanupHandlers.has(this.currentRoute)) {
+      const cleanupHandler = this.cleanupHandlers.get(this.currentRoute);
+      cleanupHandler();
+    }
     
     // Update active tab
     document.querySelectorAll('.tab').forEach(tab => {
@@ -83,4 +93,34 @@ export function showNotification(message, type = 'info') {
     notification.classList.remove('show');
     setTimeout(() => notification.remove(), 300);
   }, 3000);
+}
+
+export function showNotificationWithAction(message, type = 'info', buttonText, buttonAction) {
+  const notification = document.createElement('div');
+  notification.className = `notification notification-${type} notification-with-action`;
+  
+  const messageSpan = document.createElement('span');
+  messageSpan.textContent = message;
+  
+  const button = document.createElement('button');
+  button.className = 'notification-btn';
+  button.textContent = buttonText;
+  button.onclick = () => {
+    buttonAction();
+    notification.remove();
+  };
+  
+  notification.appendChild(messageSpan);
+  notification.appendChild(button);
+  document.body.appendChild(notification);
+
+  setTimeout(() => {
+    notification.classList.add('show');
+  }, 10);
+
+  // Auto-dismiss after 10 seconds (longer than regular notifications)
+  setTimeout(() => {
+    notification.classList.remove('show');
+    setTimeout(() => notification.remove(), 300);
+  }, 10000);
 }

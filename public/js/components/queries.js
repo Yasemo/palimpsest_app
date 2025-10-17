@@ -5,6 +5,7 @@ import Modal, { confirm } from './modal.js';
 let currentQueries = [];
 let currentSources = [];
 let currentInfoPackages = [];
+let packagesPollingInterval = null;
 
 export async function renderQueries() {
   const container = document.getElementById('app-content');
@@ -21,33 +22,70 @@ export async function renderQueries() {
       <h3>Query Batches</h3>
       <p class="text-muted">Configured query batches with scheduled source execution</p>
     </div>
+    
+    <!-- Query Search and Filter Controls -->
+    <div class="queries-controls" style="margin-bottom: 1.5rem; display: flex; gap: 1rem; flex-wrap: wrap;">
+      <input 
+        type="text" 
+        id="query-search" 
+        class="form-control" 
+        placeholder="Search by batch name..."
+        style="flex: 1; min-width: 250px;"
+      >
+      <select id="query-filter-status" class="form-control" style="width: 150px;">
+        <option value="">All Status</option>
+        <option value="active">Active</option>
+        <option value="inactive">Inactive</option>
+      </select>
+      <button id="clear-query-filters" class="btn-sm">Clear Filters</button>
+    </div>
+    
     <div id="queries-list" class="queries-grid">
       <div class="loading-text">Loading queries...</div>
     </div>
-
-    <!-- Recent Info Packages Section -->
-    <div class="section-header" style="margin-top: 2rem;">
-      <h3>Recent Info Packages</h3>
-      <p class="text-muted">Latest information packages generated from query executions</p>
-    </div>
-    <div id="recent-packages" class="info-packages-grid">
-      <div class="loading-text">Loading recent packages...</div>
+    
+    <!-- Query Pagination -->
+    <div class="query-pagination-controls" style="display: flex; justify-content: center; align-items: center; gap: 1rem; margin-top: 1.5rem; margin-bottom: 2rem;">
+      <button id="prev-query-page" class="btn-sm" disabled>← Previous</button>
+      <span id="query-page-info" class="text-muted">Page 1</span>
+      <button id="next-query-page" class="btn-sm">Next →</button>
     </div>
 
-    <!-- All Info Packages Section -->
+    <!-- Info Packages Section -->
     <div class="section-header" style="margin-top: 2rem;">
-      <h3>All Info Packages</h3>
-      <div style="display: flex; justify-content: space-between; align-items: center;">
-        <p class="text-muted">Complete history of generated info packages</p>
-        <div style="display: flex; gap: 0.5rem;">
-          <button id="prev-page" class="btn-sm" disabled>← Previous</button>
-          <span id="page-info" class="text-muted">Page 1</span>
-          <button id="next-page" class="btn-sm">Next →</button>
-        </div>
-      </div>
+      <h3>Info Packages</h3>
+      <p class="text-muted">Information packages generated from query executions</p>
     </div>
-    <div id="all-packages" class="info-packages-list">
-      <div class="loading-text">Loading all packages...</div>
+    
+    <!-- Search and Filter Controls -->
+    <div class="packages-controls" style="margin-bottom: 1.5rem; display: flex; gap: 1rem; flex-wrap: wrap;">
+      <input 
+        type="text" 
+        id="package-search" 
+        class="form-control" 
+        placeholder="Search by query name..."
+        style="flex: 1; min-width: 250px;"
+      >
+      <select id="package-filter-query" class="form-control" style="width: 200px;">
+        <option value="">All Queries</option>
+      </select>
+      <select id="package-filter-status" class="form-control" style="width: 150px;">
+        <option value="">All Status</option>
+        <option value="processed">Processed</option>
+        <option value="pending">Pending</option>
+      </select>
+      <button id="clear-filters" class="btn-sm">Clear Filters</button>
+    </div>
+    
+    <div id="packages-grid" class="info-packages-grid">
+      <div class="loading-text">Loading packages...</div>
+    </div>
+    
+    <!-- Pagination -->
+    <div class="pagination-controls" style="display: flex; justify-content: center; align-items: center; gap: 1rem; margin-top: 2rem;">
+      <button id="prev-page" class="btn-sm" disabled>← Previous</button>
+      <span id="page-info" class="text-muted">Page 1</span>
+      <button id="next-page" class="btn-sm">Next →</button>
     </div>
   `;
 
@@ -56,11 +94,61 @@ export async function renderQueries() {
   await Promise.all([
     loadSources(),
     loadQueries(),
-    loadRecentInfoPackages(),
-    loadAllInfoPackages(0)
+    loadAllPackages()
   ]);
 
+  setupFilters();
   setupPagination();
+  startPackagesPolling();
+}
+
+function startPackagesPolling() {
+  // Clear any existing interval
+  if (packagesPollingInterval) {
+    clearInterval(packagesPollingInterval);
+  }
+  
+  // Poll for new packages every 30 seconds
+  packagesPollingInterval = setInterval(async () => {
+    try {
+      const latestPackages = await api.getAllInfoPackages(1000, 0);
+      
+      // Check if there are new packages
+      const hasNewPackages = latestPackages.length > 0 && 
+        (!currentInfoPackages.length || latestPackages[0].id !== currentInfoPackages[0]?.id);
+      
+      if (hasNewPackages) {
+        // Show toast notification
+        const newPackage = latestPackages[0];
+        const queryName = newPackage.query_name || 'Query';
+        showNotification(`Query batch "${queryName}" completed successfully!`, 'success');
+        
+        // Show visual feedback
+        const header = document.querySelector('.section-header h3');
+        if (header && header.textContent.includes('Info Packages')) {
+          header.style.animation = 'pulse 0.5s ease-in-out';
+          setTimeout(() => {
+            if (header) header.style.animation = '';
+          }, 500);
+        }
+      }
+      
+      // Update packages and re-apply filters
+      allPackages = latestPackages;
+      currentInfoPackages = latestPackages.slice(0, 5);
+      applyFilters();
+    } catch (error) {
+      console.error('Failed to poll for packages:', error);
+    }
+  }, 30000); // 30 seconds
+}
+
+// Clean up polling when leaving the page
+export function cleanupQueries() {
+  if (packagesPollingInterval) {
+    clearInterval(packagesPollingInterval);
+    packagesPollingInterval = null;
+  }
 }
 
 async function loadSources() {
@@ -75,71 +163,293 @@ async function loadQueries() {
   try {
     showLoading();
     currentQueries = await api.getQueries();
+    allQueries = currentQueries;
     hideLoading();
-    renderQueriesList();
+    setupQueryFilters();
+    setupQueryPagination();
+    applyQueryFilters();
   } catch (error) {
     hideLoading();
     showNotification('Failed to load queries: ' + error.message, 'error');
   }
 }
 
-async function loadRecentInfoPackages() {
-  try {
-    const packages = await api.getAllInfoPackages(5, 0);
-    currentInfoPackages = packages;
-    renderRecentPackages(packages);
-  } catch (error) {
-    document.getElementById('recent-packages').innerHTML = 
-      '<div class="empty-state">Failed to load recent packages</div>';
-  }
+function setupQueryFilters() {
+  // Add event listeners for query filters
+  document.getElementById('query-search').addEventListener('input', (e) => {
+    queriesSearchTerm = e.target.value.toLowerCase();
+    currentQueriesPage = 0;
+    applyQueryFilters();
+  });
+
+  document.getElementById('query-filter-status').addEventListener('change', (e) => {
+    queriesFilterStatus = e.target.value;
+    currentQueriesPage = 0;
+    applyQueryFilters();
+  });
+
+  document.getElementById('clear-query-filters').addEventListener('click', () => {
+    queriesSearchTerm = '';
+    queriesFilterStatus = '';
+    document.getElementById('query-search').value = '';
+    document.getElementById('query-filter-status').value = '';
+    currentQueriesPage = 0;
+    applyQueryFilters();
+  });
 }
 
-let currentPage = 0;
-const packagesPerPage = 10;
+function applyQueryFilters() {
+  filteredQueries = allQueries.filter(query => {
+    // Search filter
+    if (queriesSearchTerm && !query.name?.toLowerCase().includes(queriesSearchTerm)) {
+      return false;
+    }
 
-async function loadAllInfoPackages(offset) {
+    // Status filter
+    if (queriesFilterStatus === 'active' && !query.active) {
+      return false;
+    }
+    if (queriesFilterStatus === 'inactive' && query.active) {
+      return false;
+    }
+
+    return true;
+  });
+
+  renderQueriesList();
+}
+
+function setupQueryPagination() {
+  document.getElementById('prev-query-page').addEventListener('click', () => {
+    if (currentQueriesPage > 0) {
+      currentQueriesPage--;
+      renderQueriesList();
+    }
+  });
+
+  document.getElementById('next-query-page').addEventListener('click', () => {
+    currentQueriesPage++;
+    renderQueriesList();
+  });
+}
+
+// Pagination and filtering for packages
+let currentPackagesPage = 0;
+const packagesPerPage = 9; // 3x3 grid
+let allPackages = [];
+let filteredPackages = [];
+let packagesSearchTerm = '';
+let packagesFilterQuery = '';
+let packagesFilterStatus = '';
+
+// Pagination and filtering for queries
+let currentQueriesPage = 0;
+const queriesPerPage = 4; // 2x2 grid
+let allQueries = [];
+let filteredQueries = [];
+let queriesSearchTerm = '';
+let queriesFilterStatus = '';
+
+async function loadAllPackages() {
   try {
-    const packages = await api.getAllInfoPackages(packagesPerPage, offset);
-    renderAllPackages(packages);
-    
-    // Update pagination buttons
-    document.getElementById('prev-page').disabled = offset === 0;
-    document.getElementById('next-page').disabled = packages.length < packagesPerPage;
-    document.getElementById('page-info').textContent = `Page ${Math.floor(offset / packagesPerPage) + 1}`;
+    showLoading();
+    // Load a large number to get all packages (adjust if needed)
+    const packages = await api.getAllInfoPackages(1000, 0);
+    allPackages = packages;
+    currentInfoPackages = packages.slice(0, 5); // Store first 5 for polling comparison
+    hideLoading();
+    applyFilters();
   } catch (error) {
-    document.getElementById('all-packages').innerHTML = 
+    hideLoading();
+    document.getElementById('packages-grid').innerHTML = 
       '<div class="empty-state">Failed to load packages</div>';
   }
 }
 
+function setupFilters() {
+  // Populate query filter dropdown
+  const queryFilter = document.getElementById('package-filter-query');
+  const uniqueQueries = [...new Set(allPackages.map(pkg => pkg.query_name))].filter(Boolean);
+  uniqueQueries.forEach(queryName => {
+    const option = document.createElement('option');
+    option.value = queryName;
+    option.textContent = queryName;
+    queryFilter.appendChild(option);
+  });
+
+  // Add event listeners
+  document.getElementById('package-search').addEventListener('input', (e) => {
+    packagesSearchTerm = e.target.value.toLowerCase();
+    currentPackagesPage = 0;
+    applyFilters();
+  });
+
+  document.getElementById('package-filter-query').addEventListener('change', (e) => {
+    packagesFilterQuery = e.target.value;
+    currentPackagesPage = 0;
+    applyFilters();
+  });
+
+  document.getElementById('package-filter-status').addEventListener('change', (e) => {
+    packagesFilterStatus = e.target.value;
+    currentPackagesPage = 0;
+    applyFilters();
+  });
+
+  document.getElementById('clear-filters').addEventListener('click', () => {
+    packagesSearchTerm = '';
+    packagesFilterQuery = '';
+    packagesFilterStatus = '';
+    document.getElementById('package-search').value = '';
+    document.getElementById('package-filter-query').value = '';
+    document.getElementById('package-filter-status').value = '';
+    currentPackagesPage = 0;
+    applyFilters();
+  });
+}
+
+function applyFilters() {
+  filteredPackages = allPackages.filter(pkg => {
+    // Search filter
+    if (packagesSearchTerm && !pkg.query_name?.toLowerCase().includes(packagesSearchTerm)) {
+      return false;
+    }
+
+    // Query filter
+    if (packagesFilterQuery && pkg.query_name !== packagesFilterQuery) {
+      return false;
+    }
+
+    // Status filter
+    if (packagesFilterStatus === 'processed' && !pkg.processed) {
+      return false;
+    }
+    if (packagesFilterStatus === 'pending' && pkg.processed) {
+      return false;
+    }
+
+    return true;
+  });
+
+  renderPackagesGrid();
+}
+
+function renderPackagesGrid() {
+  const container = document.getElementById('packages-grid');
+  const start = currentPackagesPage * packagesPerPage;
+  const end = start + packagesPerPage;
+  const pagePackages = filteredPackages.slice(start, end);
+
+  if (filteredPackages.length === 0) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <p>No info packages found</p>
+        <p class="text-muted">Try adjusting your filters</p>
+      </div>
+    `;
+    updatePaginationControls();
+    return;
+  }
+
+  container.innerHTML = pagePackages.map(pkg => {
+    const data = typeof pkg.data === 'string' ? JSON.parse(pkg.data) : pkg.data;
+    const summary = data.executionSummary || {};
+    
+    return `
+      <div class="card info-package-card">
+        <div class="card-header">
+          <h4>${escapeHtml(pkg.query_name || 'Unknown Query')}</h4>
+          <span class="badge badge-success">
+            Complete
+          </span>
+        </div>
+        
+        <div class="card-body">
+          <div class="package-summary">
+            <div class="summary-item">
+              <span class="label">Created:</span>
+              <span class="value">${formatFullDate(pkg.created_at)}</span>
+            </div>
+            <div class="summary-item">
+              <span class="label">Sources:</span>
+              <span class="value">${summary.totalSources || 0} total</span>
+            </div>
+            <div class="summary-item">
+              <span class="label">Success:</span>
+              <span class="value">${summary.successCount || 0}</span>
+            </div>
+            ${summary.errorCount > 0 ? `
+              <div class="summary-item">
+                <span class="label">Errors:</span>
+                <span class="value text-error">${summary.errorCount}</span>
+              </div>
+            ` : ''}
+          </div>
+        </div>
+        
+        <div class="card-actions">
+          <button class="btn-sm btn-success" onclick="window.executePackageWithAI(${pkg.id})">
+            Execute with AI
+          </button>
+          <button class="btn-sm btn-primary" onclick="window.viewPackageDetails(${pkg.id})">
+            View Details
+          </button>
+          <button class="btn-sm btn-danger" onclick="window.deletePackage(${pkg.id})">
+            Delete
+          </button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  updatePaginationControls();
+}
+
+function updatePaginationControls() {
+  const totalPages = Math.ceil(filteredPackages.length / packagesPerPage);
+  const prevBtn = document.getElementById('prev-page');
+  const nextBtn = document.getElementById('next-page');
+  const pageInfo = document.getElementById('page-info');
+
+  prevBtn.disabled = currentPackagesPage === 0;
+  nextBtn.disabled = currentPackagesPage >= totalPages - 1 || filteredPackages.length === 0;
+  pageInfo.textContent = filteredPackages.length > 0 
+    ? `Page ${currentPackagesPage + 1} of ${totalPages}` 
+    : 'No results';
+}
+
 function setupPagination() {
   document.getElementById('prev-page').addEventListener('click', () => {
-    if (currentPage > 0) {
-      currentPage--;
-      loadAllInfoPackages(currentPage * packagesPerPage);
+    if (currentPackagesPage > 0) {
+      currentPackagesPage--;
+      renderPackagesGrid();
     }
   });
 
   document.getElementById('next-page').addEventListener('click', () => {
-    currentPage++;
-    loadAllInfoPackages(currentPage * packagesPerPage);
+    currentPackagesPage++;
+    renderPackagesGrid();
   });
 }
 
 function renderQueriesList() {
   const container = document.getElementById('queries-list');
+  const start = currentQueriesPage * queriesPerPage;
+  const end = start + queriesPerPage;
+  const pageQueries = filteredQueries.slice(start, end);
   
-  if (currentQueries.length === 0) {
+  if (filteredQueries.length === 0) {
     container.innerHTML = `
       <div class="empty-state">
-        <p>No query batches configured yet</p>
-        <p class="text-muted">Create your first query batch to start generating info packages</p>
+        <p>No query batches found</p>
+        <p class="text-muted">Try adjusting your filters</p>
       </div>
     `;
+    updateQueryPaginationControls();
     return;
   }
 
-  container.innerHTML = currentQueries.map(query => {
+  container.innerHTML = pageQueries.map(query => {
     const config = typeof query.query_config === 'string' 
       ? JSON.parse(query.query_config) 
       : query.query_config;
@@ -193,6 +503,23 @@ function renderQueriesList() {
       </div>
     `;
   }).join('');
+
+  updateQueryPaginationControls();
+}
+
+function updateQueryPaginationControls() {
+  const totalPages = Math.ceil(filteredQueries.length / queriesPerPage);
+  const prevBtn = document.getElementById('prev-query-page');
+  const nextBtn = document.getElementById('next-query-page');
+  const pageInfo = document.getElementById('query-page-info');
+
+  if (prevBtn) prevBtn.disabled = currentQueriesPage === 0;
+  if (nextBtn) nextBtn.disabled = currentQueriesPage >= totalPages - 1 || filteredQueries.length === 0;
+  if (pageInfo) {
+    pageInfo.textContent = filteredQueries.length > 0 
+      ? `Page ${currentQueriesPage + 1} of ${totalPages}` 
+      : 'No results';
+  }
 }
 
 function renderRecentPackages(packages) {
@@ -216,8 +543,8 @@ function renderRecentPackages(packages) {
       <div class="card info-package-card">
         <div class="card-header">
           <h4>${escapeHtml(pkg.query_name || 'Unknown Query')}</h4>
-          <span class="badge ${pkg.processed ? 'badge-success' : 'badge-secondary'}">
-            ${pkg.processed ? 'Processed' : 'Pending'}
+          <span class="badge badge-success">
+            Complete
           </span>
         </div>
         
@@ -296,9 +623,9 @@ function renderAllPackages(packages) {
                 ${summary.errorCount > 0 ? `<span class="text-error">(${summary.errorCount} errors)</span>` : ''}
               </td>
               <td>
-                <span class="badge ${pkg.processed ? 'badge-success' : 'badge-secondary'}">
-                  ${pkg.processed ? 'Processed' : 'Pending'}
-                </span>
+              <span class="badge badge-success">
+                Complete
+              </span>
               </td>
               <td>
                 <button class="btn-sm" onclick="window.viewPackageDetails(${pkg.id})">View</button>
@@ -736,7 +1063,7 @@ window.executeQueryBatch = async (id) => {
           <div id="execution-status" class="execution-status">
             ${sources.map((source, index) => `
               <div class="source-execution-item" id="source-${source.id}">
-                <span class="execution-icon">⏱️</span>
+                <span class="execution-icon"><i data-feather="clock"></i></span>
                 <span class="source-name">${index + 1}. ${escapeHtml(source.name)}</span>
                 <span class="execution-status-text">Waiting...</span>
               </div>
@@ -757,7 +1084,8 @@ window.executeQueryBatch = async (id) => {
       
       // Update to "executing" status
       if (statusItem) {
-        statusItem.querySelector('.execution-icon').textContent = '⏳';
+        statusItem.querySelector('.execution-icon').innerHTML = '<i data-feather="loader"></i>';
+        feather.replace();
         statusItem.querySelector('.execution-status-text').textContent = 'Executing...';
         statusItem.style.fontWeight = 'bold';
       }
@@ -768,7 +1096,8 @@ window.executeQueryBatch = async (id) => {
         
         // Update to "success" status
         if (statusItem) {
-          statusItem.querySelector('.execution-icon').textContent = '✓';
+          statusItem.querySelector('.execution-icon').innerHTML = '<i data-feather="check-circle"></i>';
+          feather.replace();
           statusItem.querySelector('.execution-status-text').textContent = 'Complete';
           statusItem.style.color = 'var(--success)';
           statusItem.style.fontWeight = 'normal';
@@ -786,7 +1115,8 @@ window.executeQueryBatch = async (id) => {
       } catch (error) {
         // Update to "error" status
         if (statusItem) {
-          statusItem.querySelector('.execution-icon').textContent = '✗';
+          statusItem.querySelector('.execution-icon').innerHTML = '<i data-feather="x-circle"></i>';
+          feather.replace();
           statusItem.querySelector('.execution-status-text').textContent = 'Failed';
           statusItem.style.color = 'var(--error)';
           statusItem.style.fontWeight = 'normal';
@@ -830,11 +1160,8 @@ window.executeQueryBatch = async (id) => {
         })
       });
       
-      // Refresh the packages lists
-      await Promise.all([
-        loadRecentInfoPackages(),
-        loadAllInfoPackages(currentPage * packagesPerPage)
-      ]);
+      // Refresh the packages list
+      await loadAllPackages();
       
       // Update modal actions with success message
       progressModal.modalElement.querySelector('.modal-actions').innerHTML = `
@@ -1058,10 +1385,7 @@ window.deletePackage = async (id) => {
     await api.deleteInfoPackage(id);
     hideLoading();
     showNotification('Info package deleted successfully', 'success');
-    await Promise.all([
-      loadRecentInfoPackages(),
-      loadAllInfoPackages(currentPage * packagesPerPage)
-    ]);
+    await loadAllPackages();
   } catch (error) {
     hideLoading();
     showNotification('Failed to delete package: ' + error.message, 'error');
@@ -1124,11 +1448,8 @@ async function savePackageDirective(id, directive, modal) {
     showNotification('Directive updated successfully', 'success');
     modal.close();
     
-    // Refresh package lists
-    await Promise.all([
-      loadRecentInfoPackages(),
-      loadAllInfoPackages(currentPage * packagesPerPage)
-    ]);
+    // Refresh package list
+    await loadAllPackages();
     
     // Reopen the package details with updated data
     await window.viewPackageDetails(id);
@@ -1137,6 +1458,69 @@ async function savePackageDirective(id, directive, modal) {
     showNotification('Failed to update directive: ' + error.message, 'error');
   }
 }
+
+window.executePackageWithAI = async (id) => {
+  // Find the card element and add processing state
+  const cardElement = document.querySelector(`[onclick*="executePackageWithAI(${id})"]`)?.closest('.card');
+  if (cardElement) {
+    cardElement.classList.add('processing');
+    const badge = document.createElement('span');
+    badge.className = 'badge badge-processing';
+    badge.innerHTML = '<i data-feather="loader"></i> Processing...';
+    badge.id = `processing-badge-${id}`;
+    cardElement.querySelector('.card-header')?.appendChild(badge);
+    if (window.feather) feather.replace();
+  }
+  
+  // Show initial toast (non-blocking)
+  showNotification('AI processing started in background...', 'info');
+  
+  // Process in background without blocking UI
+  try {
+    const result = await api.processInfoPackage(id);
+    
+    // Remove processing state
+    if (cardElement) {
+      cardElement.classList.remove('processing');
+      const badge = document.getElementById(`processing-badge-${id}`);
+      if (badge) badge.remove();
+    }
+    
+    // Show success notification with View Content button
+    const contentId = result.id;
+    showNotificationWithAction(
+      'AI processing complete! Content created successfully.',
+      'success',
+      'View Content',
+      () => {
+        // Navigate to content tab
+        window.location.hash = '#content';
+        // Scroll to and highlight the new content after a brief delay
+        setTimeout(() => {
+          const contentCard = document.querySelector(`[onclick*="viewContent(${contentId})"]`);
+          if (contentCard) {
+            contentCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            contentCard.style.animation = 'pulse 1s ease-in-out';
+            setTimeout(() => {
+              if (contentCard) contentCard.style.animation = '';
+            }, 1000);
+          }
+        }, 300);
+      }
+    );
+    
+    // Refresh the packages list to update processed status
+    await loadAllPackages();
+  } catch (error) {
+    // Remove processing state on error
+    if (cardElement) {
+      cardElement.classList.remove('processing');
+      const badge = document.getElementById(`processing-badge-${id}`);
+      if (badge) badge.remove();
+    }
+    showNotification('Failed to process with AI: ' + error.message, 'error');
+  }
+};
 
 window.processPackage = async (id) => {
   try {
@@ -1172,4 +1556,16 @@ function formatDate(dateString) {
   if (diffDays < 7) return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
   
   return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
+}
+
+function formatFullDate(dateString) {
+  const date = new Date(dateString);
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  });
 }

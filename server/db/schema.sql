@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS sources (
     config JSONB NOT NULL, -- Source-specific configuration
     schedule VARCHAR(100), -- Cron expression
     active BOOLEAN DEFAULT true,
+    last_executed_at TIMESTAMP,
+    last_execution_status VARCHAR(50),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -18,7 +20,8 @@ CREATE TABLE IF NOT EXISTS source_results (
     source_id INTEGER REFERENCES sources(id) ON DELETE CASCADE,
     data JSONB NOT NULL,
     executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    status VARCHAR(50) DEFAULT 'success' -- 'success', 'error'
+    status VARCHAR(50) DEFAULT 'success', -- 'success', 'error'
+    error_message TEXT
 );
 
 -- Queries: Batch query configurations
@@ -29,6 +32,7 @@ CREATE TABLE IF NOT EXISTS queries (
     directive TEXT NOT NULL, -- Instructions for AI
     schedule VARCHAR(100), -- Cron expression
     active BOOLEAN DEFAULT true,
+    next_run_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -36,7 +40,7 @@ CREATE TABLE IF NOT EXISTS queries (
 -- Info packages: Query results with directive
 CREATE TABLE IF NOT EXISTS info_packages (
     id SERIAL PRIMARY KEY,
-    query_id INTEGER REFERENCES queries(id) ON DELETE CASCADE,
+    query_id INTEGER REFERENCES queries(id) ON DELETE SET NULL,
     data JSONB NOT NULL, -- Queried data from database
     directive TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -46,17 +50,14 @@ CREATE TABLE IF NOT EXISTS info_packages (
 -- AI configuration: AI settings (single row)
 CREATE TABLE IF NOT EXISTS ai_config (
     id SERIAL PRIMARY KEY,
-    model VARCHAR(255) NOT NULL DEFAULT 'openai/gpt-4',
+    model VARCHAR(255) NOT NULL,
     system_prompt TEXT,
     temperature DECIMAL(3,2) DEFAULT 0.7,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     CHECK (id = 1) -- Ensure only one row
 );
 
--- Insert default AI config
-INSERT INTO ai_config (id, model, system_prompt, temperature)
-VALUES (1, 'openai/gpt-4', 'You are a professional PR assistant helping the Canadian Muslim community create compelling media content.', 0.7)
-ON CONFLICT (id) DO NOTHING;
+-- Note: Default AI config is inserted by setup.ts using DEFAULT_AI_MODEL environment variable
 
 -- Content: AI-generated content
 CREATE TABLE IF NOT EXISTS content (
@@ -93,8 +94,11 @@ CREATE TABLE IF NOT EXISTS output_logs (
 
 -- Create indexes for better query performance
 CREATE INDEX IF NOT EXISTS idx_sources_active ON sources(active);
+CREATE INDEX IF NOT EXISTS idx_sources_last_executed_at ON sources(last_executed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_source_results_source_id ON source_results(source_id);
+CREATE INDEX IF NOT EXISTS idx_source_results_executed_at ON source_results(executed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_queries_active ON queries(active);
+CREATE INDEX IF NOT EXISTS idx_queries_next_run_at ON queries(next_run_at) WHERE active = true;
 CREATE INDEX IF NOT EXISTS idx_info_packages_query_id ON info_packages(query_id);
 CREATE INDEX IF NOT EXISTS idx_info_packages_processed ON info_packages(processed);
 CREATE INDEX IF NOT EXISTS idx_content_info_package_id ON content(info_package_id);

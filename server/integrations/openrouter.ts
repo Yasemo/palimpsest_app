@@ -63,6 +63,27 @@ export class OpenRouterIntegration extends Integration {
       content: userPrompt,
     });
 
+    // Ensure temperature and max_tokens are numbers
+    const tempNumber = typeof temperature === 'string' ? parseFloat(temperature) : temperature;
+    const maxTokensNumber = typeof max_tokens === 'string' ? parseInt(max_tokens) : max_tokens;
+
+    const requestBody = {
+      model,
+      messages,
+      temperature: tempNumber,
+      max_tokens: maxTokensNumber,
+    };
+
+    console.log("[OpenRouter] 📤 Sending request to OpenRouter API");
+    console.log("[OpenRouter] Model:", model);
+    console.log("[OpenRouter] Temperature:", tempNumber);
+    console.log("[OpenRouter] Max Tokens:", maxTokensNumber);
+    console.log("[OpenRouter] System Prompt Length:", systemPrompt ? systemPrompt.length : 0, "characters");
+    console.log("[OpenRouter] User Prompt Length:", userPrompt.length, "characters");
+    console.log("[OpenRouter] Message Count:", messages.length);
+
+    const startTime = Date.now();
+
     // Use the latest OpenRouter API endpoint with proper headers
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
@@ -72,20 +93,41 @@ export class OpenRouterIntegration extends Integration {
         "HTTP-Referer": "https://palimpsest.app", // For rankings
         "X-Title": "Palimpsest PR App", // Site name for transparency
       },
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature,
-        max_tokens,
-      }),
+      body: JSON.stringify(requestBody),
     });
+
+    const endTime = Date.now();
+    const duration = endTime - startTime;
 
     if (!response.ok) {
       const errorText = await response.text();
+      console.error("[OpenRouter] ❌ API Error:", response.status);
+      console.error("[OpenRouter] Error Details:", errorText);
+      console.error("[OpenRouter] Request took:", duration, "ms");
       throw new Error(`OpenRouter API error: ${response.status} - ${errorText}`);
     }
 
     const data = await response.json();
+    
+    console.log("[OpenRouter] ✅ Response received");
+    console.log("[OpenRouter] Request Duration:", duration, "ms");
+    console.log("[OpenRouter] Model Used:", data.model);
+    console.log("[OpenRouter] Response Length:", data.choices[0]?.message?.content?.length || 0, "characters");
+    
+    if (data.usage) {
+      console.log("[OpenRouter] 📊 Token Usage:");
+      console.log("[OpenRouter]   - Prompt Tokens:", data.usage.prompt_tokens);
+      console.log("[OpenRouter]   - Completion Tokens:", data.usage.completion_tokens);
+      console.log("[OpenRouter]   - Total Tokens:", data.usage.total_tokens);
+    }
+
+    // Log cost estimation if available
+    if (data.usage && data.usage.prompt_tokens && data.usage.completion_tokens) {
+      const estimatedCost = this.estimateCost(data.usage.prompt_tokens, data.usage.completion_tokens, model);
+      if (estimatedCost > 0) {
+        console.log("[OpenRouter] 💰 Estimated Cost: $" + estimatedCost.toFixed(4));
+      }
+    }
     
     return {
       content: data.choices[0]?.message?.content || "",
@@ -93,6 +135,39 @@ export class OpenRouterIntegration extends Integration {
       usage: data.usage,
       timestamp: new Date().toISOString(),
     };
+  }
+
+  // Estimate cost based on token usage (rough estimates)
+  private estimateCost(promptTokens: number, completionTokens: number, modelId: string): number {
+    // These are rough estimates - actual costs may vary
+    const costPerMillionPrompt: { [key: string]: number } = {
+      'openai/gpt-4': 30,
+      'openai/gpt-4-turbo': 10,
+      'openai/gpt-4o': 5,
+      'openai/gpt-3.5-turbo': 0.5,
+      'anthropic/claude-3-opus': 15,
+      'anthropic/claude-3-sonnet': 3,
+      'anthropic/claude-3-haiku': 0.25,
+      'anthropic/claude-3.5-sonnet': 3,
+      'google/gemini-pro': 0.5,
+    };
+
+    const costPerMillionCompletion: { [key: string]: number } = {
+      'openai/gpt-4': 60,
+      'openai/gpt-4-turbo': 30,
+      'openai/gpt-4o': 15,
+      'openai/gpt-3.5-turbo': 1.5,
+      'anthropic/claude-3-opus': 75,
+      'anthropic/claude-3-sonnet': 15,
+      'anthropic/claude-3-haiku': 1.25,
+      'anthropic/claude-3.5-sonnet': 15,
+      'google/gemini-pro': 1.5,
+    };
+
+    const promptCost = costPerMillionPrompt[modelId] || 5; // Default to 5 if unknown
+    const completionCost = costPerMillionCompletion[modelId] || 10; // Default to 10 if unknown
+
+    return (promptTokens / 1000000 * promptCost) + (completionTokens / 1000000 * completionCost);
   }
 
   // Get available models from OpenRouter

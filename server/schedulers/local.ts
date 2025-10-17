@@ -122,7 +122,13 @@ export function startLocalScheduler() {
                   ["success", sourceData.id]
                 );
 
-                sourceResults.push(resultInsert.rows[0]);
+                // Store both DB result AND source metadata
+                sourceResults.push({
+                  dbResult: resultInsert.rows[0],
+                  sourceName: sourceData.name,
+                  sourceId: sourceData.id,
+                  sourceType: sourceData.type
+                });
                 
                 const sourceEndTime = new Date();
                 const sourceDuration = formatDuration(sourceStartTime, sourceEndTime);
@@ -133,9 +139,10 @@ export function startLocalScheduler() {
                 console.error(`[QUERY-BATCH]     ✗ Source "${sourceData.name}" failed: ${errorMessage}`);
                 
                 // Store error result
-                await db.query(
+                const errorInsert = await db.query(
                   `INSERT INTO source_results (source_id, data, status, error_message) 
-                   VALUES ($1, $2, $3, $4)`,
+                   VALUES ($1, $2, $3, $4)
+                   RETURNING *`,
                   [sourceData.id, JSON.stringify({ error: errorMessage }), "error", errorMessage]
                 );
 
@@ -148,27 +155,56 @@ export function startLocalScheduler() {
                   ["error", sourceData.id]
                 );
                 
-                // Add error result to collection (don't stop processing other sources)
+                // Add error result to collection with metadata
                 sourceResults.push({
-                  source_id: sourceData.id,
-                  data: { error: errorMessage },
-                  status: "error",
-                  error_message: errorMessage,
-                  executed_at: new Date().toISOString()
+                  dbResult: errorInsert.rows[0],
+                  sourceName: sourceData.name,
+                  sourceId: sourceData.id,
+                  sourceType: sourceData.type
                 });
               }
             }
             
-            data.sources = sourceResults;
-            const successCount = sourceResults.filter(r => r.status === "success").length;
-            const errorCount = sourceResults.filter(r => r.status === "error").length;
+            // Transform source results to match manual execution format
+            data.sources = sourceResults.map((result: any) => {
+              const dbResult = result.dbResult;
+              
+              // Extract the actual content from the nested data field
+              const actualData = typeof dbResult.data === 'string' ? JSON.parse(dbResult.data) : dbResult.data;
+              
+              // Match the structure from manual execution (/api/queries/:id/execute)
+              return {
+                sourceId: result.sourceId,
+                sourceName: result.sourceName,
+                sourceType: result.sourceType,
+                result: dbResult, // Include full database result
+                status: dbResult.status,
+                executedAt: dbResult.executed_at
+              };
+            });
+            
+            const successCount = sourceResults.filter(r => r.dbResult.status === "success").length;
+            const errorCount = sourceResults.filter(r => r.dbResult.status === "error").length;
+            
+            // Add execution summary (matching manual execution format)
+            data.executionSummary = {
+              totalSources: sourceResults.length,
+              successCount: successCount,
+              errorCount: errorCount
+            };
+            
             console.log(`[QUERY-BATCH]   → Completed ${successCount}/${sourceResults.length} source(s) successfully (${errorCount} failed)`);
           } else {
             console.log(`[QUERY-BATCH]   → No sources configured for this query`);
             data.sources = [];
+            data.executionSummary = {
+              totalSources: 0,
+              successCount: 0,
+              errorCount: 0
+            };
           }
 
-          // Create info package
+          // Create info package with improved data structure
           await db.query(
             "INSERT INTO info_packages (query_id, data, directive, processed) VALUES ($1, $2, $3, false)",
             [queryData.id, JSON.stringify(data), queryData.directive]

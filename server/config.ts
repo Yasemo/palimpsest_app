@@ -10,6 +10,10 @@ export const config = {
   openrouter: {
     apiKey: Deno.env.get("OPENROUTER_API_KEY") || "",
   },
+  ai: {
+    defaultModel: Deno.env.get("DEFAULT_AI_MODEL") || "openai/gpt-4o",
+    defaultContentEditorModel: Deno.env.get("DEFAULT_CONTENT_EDITOR_MODEL") || "anthropic/claude-3.5-sonnet",
+  },
   gmail: {
     clientId: Deno.env.get("GMAIL_CLIENT_ID") || "",
     clientSecret: Deno.env.get("GMAIL_CLIENT_SECRET") || "",

@@ -1,5 +1,6 @@
 import { db } from "../db/client.ts";
 import { openrouterIntegration } from "../integrations/openrouter.ts";
+import { config } from "../config.ts";
 
 export async function handleAIRoutes(req: Request, pathname: string): Promise<Response> {
   const pathParts = pathname.split("/").filter(Boolean);
@@ -10,13 +11,23 @@ export async function handleAIRoutes(req: Request, pathname: string): Promise<Re
       const result = await db.query("SELECT * FROM ai_config WHERE id = 1");
       
       if (result.rows.length === 0) {
-        return new Response(JSON.stringify({ error: "AI config not found" }), {
-          status: 404,
+        // Return default config from environment variables if none exists
+        return new Response(JSON.stringify({
+          model: config.ai.defaultModel,
+          temperature: 0.7,
+          system_prompt: "You are a helpful AI assistant that processes information and creates well-structured content."
+        }), {
           headers: { "Content-Type": "application/json" },
         });
       }
 
-      return new Response(JSON.stringify(result.rows[0]), {
+      // Use environment variable as fallback for model
+      const aiConfigRow = result.rows[0] as any;
+      if (!aiConfigRow.model) {
+        aiConfigRow.model = config.ai.defaultModel;
+      }
+
+      return new Response(JSON.stringify(aiConfigRow), {
         headers: { "Content-Type": "application/json" },
       });
     } catch (error) {
