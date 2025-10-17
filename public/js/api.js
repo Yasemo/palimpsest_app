@@ -14,12 +14,22 @@ class API {
 
     try {
       const response = await fetch(url, config);
-      const data = await response.json();
 
+      // Check response status first before trying to parse JSON
       if (!response.ok) {
-        throw new Error(data.error || 'Request failed');
+        let errorMsg = `Request failed with status ${response.status}`;
+        try {
+          const errorData = await response.json();
+          errorMsg = errorData.error || errorMsg;
+        } catch {
+          // Response has no JSON body, use status text
+          errorMsg = response.statusText || errorMsg;
+        }
+        throw new Error(errorMsg);
       }
 
+      // Only parse JSON if response is ok
+      const data = await response.json();
       return data;
     } catch (error) {
       console.error('API Error:', error);
@@ -111,6 +121,13 @@ class API {
 
   async getInfoPackage(id) {
     return this.request(`/api/info-packages/${id}`);
+  }
+
+  async createInfoPackage(data) {
+    return this.request('/api/info-packages', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
   }
 
   async updateInfoPackage(id, data) {
@@ -226,6 +243,24 @@ class API {
 
   async getOutputLogs(id, limit = 50) {
     return this.request(`/api/outputs/${id}/logs?limit=${limit}`);
+  }
+
+  async getOutputTags(outputId) {
+    return this.request(`/api/outputs/${outputId}/tags`);
+  }
+
+  async setOutputTags(outputId, tagIds) {
+    return this.request(`/api/outputs/${outputId}/tags`, {
+      method: 'POST',
+      body: JSON.stringify({ tag_ids: tagIds }),
+    });
+  }
+
+  async previewOutputContent(tagIds, cutoffDays) {
+    return this.request('/api/outputs/preview', {
+      method: 'POST',
+      body: JSON.stringify({ tag_ids: tagIds, cutoff_days: cutoffDays }),
+    });
   }
 
   // Tags

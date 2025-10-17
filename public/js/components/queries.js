@@ -109,7 +109,10 @@ function startPackagesPolling() {
     clearInterval(packagesPollingInterval);
   }
   
-  // Poll for new packages every 30 seconds
+  // Store last seen content ID
+  let lastSeenContentId = null;
+  
+  // Poll for new packages and content every 30 seconds
   packagesPollingInterval = setInterval(async () => {
     try {
       const latestPackages = await api.getAllInfoPackages(1000, 0);
@@ -119,10 +122,17 @@ function startPackagesPolling() {
         (!currentInfoPackages.length || latestPackages[0].id !== currentInfoPackages[0]?.id);
       
       if (hasNewPackages) {
-        // Show toast notification
         const newPackage = latestPackages[0];
         const queryName = newPackage.query_name || 'Query';
-        showNotification(`Query batch "${queryName}" completed successfully!`, 'success');
+        
+        // Check if this package was auto-processed (has processed=true immediately)
+        if (newPackage.processed) {
+          // This was likely auto-processed! Show special notification
+          showNotification(`✨ "${queryName}" executed and content auto-generated!`, 'success');
+        } else {
+          // Regular package notification
+          showNotification(`Query batch "${queryName}" completed successfully!`, 'success');
+        }
         
         // Show visual feedback
         const header = document.querySelector('.section-header h3');
@@ -676,13 +686,29 @@ function renderAllPackages(packages) {
   `;
 }
 
-function showQueryModal(query = null) {
+async function showQueryModal(query = null) {
   const isEdit = !!query;
   const config = query && typeof query.query_config === 'string' 
     ? JSON.parse(query.query_config) 
     : (query?.query_config || { sources: [], schedule: {} });
   
   const schedule = config.schedule || {};
+  
+  // Load all available tags
+  let allTags = [];
+  let selectedTagIds = [];
+  
+  try {
+    allTags = await api.getTags();
+    
+    // Load existing tags if editing
+    if (isEdit && query?.id) {
+      const existingTags = await api.getQueryTags(query.id);
+      selectedTagIds = existingTags.map(t => t.id);
+    }
+  } catch (error) {
+    console.error('Failed to load tags:', error);
+  }
   
   const modal = new Modal();
   modal.create({
@@ -762,7 +788,38 @@ function showQueryModal(query = null) {
         <div class="form-section">
           <h4>Tags</h4>
           <p class="text-muted">Organize and categorize this query batch</p>
-          <div id="tag-input-container"></div>
+          
+          ${allTags.length > 10 ? `
+            <div class="form-group">
+              <input 
+                type="text" 
+                id="tag-search" 
+                class="form-control" 
+                placeholder="Search tags..."
+                style="margin-bottom: 1rem;"
+              >
+            </div>
+          ` : ''}
+          
+          <div id="tags-selection" class="tags-selection" style="max-height: 300px; overflow-y: auto; border: 1px solid var(--border-light); border-radius: 2px; padding: 0.5rem; background: var(--bg-secondary);">
+            ${allTags.length === 0 ? `
+              <div class="empty-state" style="padding: 2rem; text-align: center;">
+                <p>No tags available</p>
+                <p class="text-muted" style="font-size: 0.875rem;">Tags will appear here once created</p>
+              </div>
+            ` : allTags.map(tag => `
+              <label class="tag-filter-item" data-tag-name="${escapeHtml(tag.name).toLowerCase()}">
+                <input 
+                  type="checkbox" 
+                  name="tags" 
+                  value="${tag.id}"
+                  ${selectedTagIds.includes(tag.id) ? 'checked' : ''}
+                >
+                <span class="tag-color-dot" style="background-color: ${tag.color};"></span>
+                <span>${escapeHtml(tag.name)}</span>
+              </label>
+            `).join('')}
+          </div>
         </div>
 
         <div class="form-section">
@@ -835,6 +892,19 @@ function showQueryModal(query = null) {
           </label>
           <small class="form-text">Inactive query batches won't run on schedule</small>
         </div>
+
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input 
+              type="checkbox" 
+              id="auto-process-ai" 
+              name="auto_process_with_ai"
+              ${query?.auto_process_with_ai ? 'checked' : ''}
+            >
+            Automatically execute with AI
+          </label>
+          <small class="form-text">When enabled, info packages will be immediately processed with AI to generate content cards</small>
+        </div>
       </form>
     `,
     actions: [
@@ -875,26 +945,23 @@ function showQueryModal(query = null) {
     document.getElementById(id)?.addEventListener('change', updateSchedulePreview);
   });
 
-  // Initialize tag input component
-  const tagContainer = document.getElementById('tag-input-container');
-  let tagInput = null;
-  if (tagContainer) {
-    tagInput = new TagInput(tagContainer);
-    
-    // Load existing tags if editing
-    if (isEdit && query?.id) {
-      api.getQueryTags(query.id).then(tags => {
-        if (tags && tags.length > 0) {
-          tagInput.setTags(tags.map(t => t.id));
+  // Add tag search functionality if search box exists
+  const tagSearchInput = document.getElementById('tag-search');
+  if (tagSearchInput) {
+    tagSearchInput.addEventListener('input', (e) => {
+      const searchTerm = e.target.value.toLowerCase();
+      const tagItems = document.querySelectorAll('.tag-filter-item');
+      
+      tagItems.forEach(item => {
+        const tagName = item.getAttribute('data-tag-name');
+        if (tagName.includes(searchTerm)) {
+          item.style.display = '';
+        } else {
+          item.style.display = 'none';
         }
-      }).catch(error => {
-        console.error('Failed to load query tags:', error);
       });
-    }
+    });
   }
-  
-  // Store tagInput reference on modal for access in save function
-  modal.tagInput = tagInput;
 }
 
 function updateSchedulePreview() {
@@ -1052,6 +1119,10 @@ async function saveQuery(formData, queryId, modal) {
     const selectedSources = Array.from(form.querySelectorAll('input[name="sources"]:checked'))
       .map(input => parseInt(input.value));
 
+    // Get selected tags from checkboxes
+    const selectedTags = Array.from(form.querySelectorAll('input[name="tags"]:checked'))
+      .map(input => parseInt(input.value));
+
     // Build schedule config
     const scheduleConfig = {
       time: formData.scheduleTime,
@@ -1075,7 +1146,8 @@ async function saveQuery(formData, queryId, modal) {
       },
       schedule: cronExpression,
       next_run_at: nextRunAt,
-      active: formData.active
+      active: formData.active,
+      auto_process_with_ai: formData.auto_process_with_ai
     };
     
     let savedQuery;
@@ -1087,12 +1159,9 @@ async function saveQuery(formData, queryId, modal) {
       showNotification('Query batch created successfully', 'success');
     }
     
-    // Save tags if tagInput exists
-    if (modal.tagInput) {
-      const tagIds = modal.tagInput.getSelectedTagIds();
-      const queryIdToUpdate = queryId || savedQuery.id;
-      await api.setQueryTags(queryIdToUpdate, tagIds);
-    }
+    // Save tags
+    const queryIdToUpdate = queryId || savedQuery.id;
+    await api.setQueryTags(queryIdToUpdate, selectedTags);
     
     modal.close();
     await loadQueries();
@@ -1113,6 +1182,11 @@ window.executeQueryBatch = async (id) => {
     
     const sourceIds = config.sources || [];
     const sourcesCount = sourceIds.length;
+
+    if (sourcesCount === 0) {
+      showNotification('No sources configured for this query', 'error');
+      return;
+    }
 
     // Get source details
     const sources = sourceIds.map(sourceId => 
@@ -1149,81 +1223,146 @@ window.executeQueryBatch = async (id) => {
     // Initialize feather icons
     if (window.feather) feather.replace();
 
-    try {
-      // Start a simulated progress update (since backend does it all at once)
-      let currentSourceIndex = 0;
-      const progressInterval = setInterval(() => {
-        if (currentSourceIndex < sources.length) {
-          const source = sources[currentSourceIndex];
-          const statusItem = progressModal.modalElement.querySelector(`#source-${source.id}`);
-          
-          if (statusItem) {
-            statusItem.querySelector('.execution-icon').innerHTML = '<i data-feather="loader"></i>';
-            if (window.feather) feather.replace();
-            statusItem.querySelector('.execution-status-text').textContent = 'Executing...';
-            statusItem.style.fontWeight = 'bold';
-          }
-          
-          // Update progress bar
-          const progressFill = progressModal.modalElement.querySelector('.progress-fill');
-          if (progressFill) {
-            const progress = ((currentSourceIndex + 1) / sources.length) * 90; // Reserve last 10% for completion
-            progressFill.style.width = `${progress}%`;
-          }
-          
-          currentSourceIndex++;
-        }
-      }, 500); // Update every 500ms to show progress
+    const sourceResults = [];
 
-      // Use the backend execute endpoint which handles everything including tag propagation
-      const infoPackage = await api.executeQuery(id);
-      
-      // Clear the interval
-      clearInterval(progressInterval);
-      
-      // Mark all sources as complete
-      sources.forEach(source => {
+    try {
+      // Execute each source sequentially with real-time UI updates
+      for (let i = 0; i < sources.length; i++) {
+        const source = sources[i];
         const statusItem = progressModal.modalElement.querySelector(`#source-${source.id}`);
+        
+        // Update UI to show this source is executing
         if (statusItem) {
-          statusItem.querySelector('.execution-icon').innerHTML = '<i data-feather="check-circle"></i>';
+          statusItem.querySelector('.execution-icon').innerHTML = '<i data-feather="loader"></i>';
           if (window.feather) feather.replace();
-          statusItem.querySelector('.execution-status-text').textContent = 'Complete';
-          statusItem.style.color = 'var(--success)';
-          statusItem.style.fontWeight = 'normal';
+          statusItem.querySelector('.execution-status-text').textContent = 'Executing...';
+          statusItem.style.fontWeight = 'bold';
         }
-      });
-      
-      // Update progress to complete
-      const progressFill = progressModal.modalElement.querySelector('.progress-fill');
-      if (progressFill) {
-        progressFill.style.width = '100%';
+        
+        try {
+          // Execute this source
+          const result = await api.executeSource(source.id);
+          
+          // Extract the integration data from the result
+          let integrationData;
+          try {
+            integrationData = typeof result.data === 'string' ? JSON.parse(result.data) : result.data;
+          } catch (parseError) {
+            console.error(`Failed to parse source result data:`, parseError);
+            integrationData = result.data;
+          }
+          
+          // Store the result
+          sourceResults.push({
+            sourceId: source.id,
+            sourceName: source.name,
+            sourceType: source.type,
+            data: integrationData,
+            status: result.status || 'success',
+            executedAt: new Date().toISOString()
+          });
+          
+          // Update UI to show success
+          if (statusItem) {
+            statusItem.querySelector('.execution-icon').innerHTML = '<i data-feather="check-circle"></i>';
+            if (window.feather) feather.replace();
+            statusItem.querySelector('.execution-status-text').textContent = 'Complete';
+            statusItem.style.color = 'var(--success)';
+            statusItem.style.fontWeight = 'normal';
+          }
+        } catch (error) {
+          // Store error result
+          sourceResults.push({
+            sourceId: source.id,
+            sourceName: source.name,
+            sourceType: source.type,
+            data: { error: error.message },
+            status: 'error',
+            executedAt: new Date().toISOString()
+          });
+          
+          // Update UI to show error
+          if (statusItem) {
+            statusItem.querySelector('.execution-icon').innerHTML = '<i data-feather="x-circle"></i>';
+            if (window.feather) feather.replace();
+            statusItem.querySelector('.execution-status-text').textContent = 'Failed';
+            statusItem.style.color = 'var(--error)';
+            statusItem.style.fontWeight = 'normal';
+          }
+        }
+        
+        // Update progress bar
+        const progressFill = progressModal.modalElement.querySelector('.progress-fill');
+        if (progressFill) {
+          const progress = ((i + 1) / sources.length) * 100;
+          progressFill.style.width = `${progress}%`;
+        }
       }
       
+      // All sources executed - now create the info package
+      const packageData = {
+        sources: sourceResults,
+        queryTitle: query.name,
+        executionSummary: {
+          totalSources: sources.length,
+          successCount: sourceResults.filter(r => r.status === 'success').length,
+          errorCount: sourceResults.filter(r => r.status === 'error').length,
+        }
+      };
+
+      // Create info package
+      const infoPackage = await api.createInfoPackage({
+        query_id: id,
+        data: packageData,
+        directive: query.directive
+      });
+
+      // Copy tags from query to info package
+      try {
+        const queryTags = await api.getQueryTags(id);
+        if (queryTags.length > 0) {
+          const tagIds = queryTags.map(tag => tag.id);
+          await api.setInfoPackageTags(infoPackage.id, tagIds);
+        }
+      } catch (tagError) {
+        console.error('Failed to copy tags to info package:', tagError);
+      }
+
       // Refresh the packages list
       await loadAllPackages();
       
-      // Update modal actions with success message
-      progressModal.modalElement.querySelector('.modal-actions').innerHTML = `
-        <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Close</button>
-        <button class="btn btn-primary" onclick="this.closest('.modal-overlay').remove(); window.viewPackageDetails(${infoPackage.id})">View Info Package</button>
-      `;
-      
-      showNotification('Info package created successfully with tags!', 'success');
-    } catch (error) {
-      // Update modal with error
-      const statusDiv = progressModal.modalElement.querySelector('#execution-status');
-      if (statusDiv) {
-        // Mark current executing source as failed if any
-        const executingItem = statusDiv.querySelector('.source-execution-item[style*="font-weight: bold"]');
-        if (executingItem) {
-          executingItem.querySelector('.execution-icon').innerHTML = '<i data-feather="x-circle"></i>';
-          if (window.feather) feather.replace();
-          executingItem.querySelector('.execution-status-text').textContent = 'Failed';
-          executingItem.style.color = 'var(--error)';
-          executingItem.style.fontWeight = 'normal';
+      // Check if auto-process with AI is enabled
+      if (query.auto_process_with_ai) {
+        // Close modal immediately
+        progressModal.close();
+        
+        // Show toast notification that processing is starting
+        showNotification('Info package created! Processing with AI in background...', 'info');
+        
+        // Process in background
+        try {
+          const content = await api.processInfoPackage(infoPackage.id);
+          
+          // Show success notification (stay on current page)
+          showNotification('✨ Content automatically generated! Check the Content tab.', 'success');
+          
+          return; // Exit early
+        } catch (aiError) {
+          console.error('Auto-processing failed:', aiError);
+          showNotification('Info package created, but AI processing failed: ' + aiError.message, 'error');
+          return;
         }
       }
       
+      // Close modal after brief delay to show completion
+      setTimeout(() => {
+        progressModal.close();
+        // Show notification with action to view package
+        showNotification('Info package created successfully!', 'success');
+      }, 1000);
+      
+    } catch (error) {
+      // Update modal with error
       progressModal.modalElement.querySelector('.modal-actions').innerHTML = `
         <button class="btn btn-primary" onclick="this.closest('.modal-overlay').remove()">Close</button>
       `;
@@ -1382,8 +1521,9 @@ window.viewPackageDetails = async (id) => {
             <h4>Source Results (${sources.length})</h4>
             <div class="sources-results">
               ${sources.map((source, index) => {
-                const resultData = source.result?.data || source.result;
+                const resultData = source.data || source.result?.data || source.result;
                 const content = resultData?.content || 'No content available';
+                const citations = resultData?.citations || [];
                 const shouldTruncate = content.length > 500;
                 const preview = shouldTruncate ? content.substring(0, 500) : content;
                 const uniqueId = `source-content-${index}`;
@@ -1413,6 +1553,20 @@ window.viewPackageDetails = async (id) => {
                               <span class="show-more">Show More</span>
                               <span class="show-less" style="display: none;">Show Less</span>
                             </button>
+                          ` : ''}
+                          ${citations.length > 0 ? `
+                            <div class="result-citations" style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border-light);">
+                              <strong>Sources:</strong>
+                              <ul class="citations-list">
+                                ${citations.map((citation, idx) => `
+                                  <li>
+                                    <a href="${escapeHtml(citation)}" target="_blank" rel="noopener noreferrer">
+                                      [${idx + 1}] ${escapeHtml(citation)}
+                                    </a>
+                                  </li>
+                                `).join('')}
+                              </ul>
+                            </div>
                           ` : ''}
                         </div>
                       ` : `
@@ -1579,7 +1733,7 @@ window.executePackageWithAI = async (id) => {
   // Show initial toast (non-blocking)
   showNotification('AI processing started in background...', 'info');
   
-  // Process in background without blocking UI
+  // Process in background without blocking UI (no loading overlay)
   try {
     const result = await api.processInfoPackage(id);
     
@@ -1593,28 +1747,9 @@ window.executePackageWithAI = async (id) => {
       if (badge) badge.remove();
     }
     
-    // Show success notification with View Content button
+    // Show success notification
     const contentId = result.id;
-    showNotificationWithAction(
-      'AI processing complete! Content created successfully.',
-      'success',
-      'View Content',
-      () => {
-        // Navigate to content tab
-        window.location.hash = '#content';
-        // Scroll to and highlight the new content after a brief delay
-        setTimeout(() => {
-          const contentCard = document.querySelector(`[onclick*="viewContent(${contentId})"]`);
-          if (contentCard) {
-            contentCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            contentCard.style.animation = 'pulse 1s ease-in-out';
-            setTimeout(() => {
-              if (contentCard) contentCard.style.animation = '';
-            }, 1000);
-          }
-        }, 300);
-      }
-    );
+    showNotification('✨ AI processing complete! Content created successfully.', 'success');
     
     // Refresh the packages list to update processed status
     await loadAllPackages();

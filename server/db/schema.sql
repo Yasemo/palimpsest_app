@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS ai_config (
 -- Content: AI-generated content
 CREATE TABLE IF NOT EXISTS content (
     id SERIAL PRIMARY KEY,
-    info_package_id INTEGER REFERENCES info_packages(id) ON DELETE CASCADE,
+    info_package_id INTEGER REFERENCES info_packages(id) ON DELETE SET NULL,
     content TEXT NOT NULL,
     chat_history JSONB DEFAULT '[]'::jsonb, -- Array of chat messages
     edited_content TEXT, -- Manually or AI-edited content

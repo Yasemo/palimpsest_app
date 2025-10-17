@@ -89,12 +89,11 @@ export class PerplexityIntegration extends Integration {
 
     const data = await response.json();
     
+    // Return only essential data - strip out all metadata bloat
+    // Only content and citations are needed for downstream AI processing
     return {
       content: data.choices[0]?.message?.content || "",
-      model: data.model,
-      usage: data.usage,
-      timestamp: new Date().toISOString(),
-      raw_response: data,
+      citations: data.citations || [],
     };
   }
 

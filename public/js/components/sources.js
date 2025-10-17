@@ -424,6 +424,20 @@ function showResultsModal(source, results) {
                       <div class="result-text">
                         ${escapeHtml(data.content || 'No content')}
                       </div>
+                      ${data.citations && data.citations.length > 0 ? `
+                        <div class="result-citations">
+                          <strong>Sources:</strong>
+                          <ul class="citations-list">
+                            ${data.citations.map((citation, idx) => `
+                              <li>
+                                <a href="${escapeHtml(citation)}" target="_blank" rel="noopener noreferrer">
+                                  [${idx + 1}] ${escapeHtml(citation)}
+                                </a>
+                              </li>
+                            `).join('')}
+                          </ul>
+                        </div>
+                      ` : ''}
                     </div>
                   `}
                 </div>

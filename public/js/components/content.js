@@ -21,6 +21,17 @@ function getPlainTextPreview(markdown, maxLength = 200) {
   return plain.length > maxLength ? plain.substring(0, maxLength) + '...' : plain;
 }
 
+// Filter state
+let contentFilters = {
+  searchText: '',
+  selectedTags: [],
+  sortBy: 'date-desc', // date-desc, date-asc, alpha-asc, alpha-desc
+  tagMatchMode: 'any' // any or all
+};
+
+let allContent = [];
+let allTags = [];
+
 export async function renderContent() {
   const container = document.getElementById('app-content');
   
@@ -29,26 +40,344 @@ export async function renderContent() {
       <h2>Content</h2>
       <p>AI-generated content from info packages</p>
     </div>
+    
+    <div class="content-filters">
+      <div class="filter-row">
+        <div class="search-box">
+          <input 
+            type="text" 
+            id="content-search" 
+            class="form-control" 
+            placeholder="Search content..."
+            value="${contentFilters.searchText}"
+          />
+          <button class="btn-sm btn-secondary" id="clear-search" style="display: ${contentFilters.searchText ? 'inline-flex' : 'none'}">
+            <i data-feather="x"></i>
+          </button>
+        </div>
+        
+        <div class="filter-group">
+          <button class="btn-secondary filter-btn" id="tag-filter-btn">
+            <i data-feather="tag"></i>
+            Tags
+            ${contentFilters.selectedTags.length > 0 ? `<span class="tag-filter-count">${contentFilters.selectedTags.length}</span>` : ''}
+          </button>
+          
+          <select id="sort-select" class="form-control">
+            <option value="date-desc" ${contentFilters.sortBy === 'date-desc' ? 'selected' : ''}>Newest First</option>
+            <option value="date-asc" ${contentFilters.sortBy === 'date-asc' ? 'selected' : ''}>Oldest First</option>
+            <option value="alpha-asc" ${contentFilters.sortBy === 'alpha-asc' ? 'selected' : ''}>A-Z</option>
+            <option value="alpha-desc" ${contentFilters.sortBy === 'alpha-desc' ? 'selected' : ''}>Z-A</option>
+          </select>
+          
+          <button class="btn-sm btn-secondary" id="clear-filters" style="display: ${(contentFilters.searchText || contentFilters.selectedTags.length > 0) ? 'inline-flex' : 'none'}">
+            Clear Filters
+          </button>
+        </div>
+      </div>
+      
+      <div class="tag-filter-dropdown" id="tag-filter-dropdown" style="display: none;">
+        <div class="tag-filter-header">
+          <span>Filter by Tags</span>
+          <div class="tag-match-mode">
+            <label class="radio-label">
+              <input type="radio" name="tag-match" value="any" ${contentFilters.tagMatchMode === 'any' ? 'checked' : ''}>
+              Match ANY
+            </label>
+            <label class="radio-label">
+              <input type="radio" name="tag-match" value="all" ${contentFilters.tagMatchMode === 'all' ? 'checked' : ''}>
+              Match ALL
+            </label>
+          </div>
+        </div>
+        <div class="tag-filter-list" id="tag-filter-list">
+          <div class="loading-text">Loading tags...</div>
+        </div>
+      </div>
+    </div>
+    
+    <div id="content-results-info" class="results-info"></div>
+    
     <div id="content-grid" class="content-grid">
       <div class="loading-text">Loading content...</div>
     </div>
   `;
 
+  // Initialize filter event listeners
+  initializeFilterListeners();
+  
+  // Load tags and content
+  await loadTags();
   window.loadContentList();
+}
+
+async function loadTags() {
+  try {
+    allTags = await api.getTags();
+    renderTagFilterList();
+  } catch (error) {
+    console.error('Failed to load tags:', error);
+  }
+}
+
+function renderTagFilterList() {
+  const container = document.getElementById('tag-filter-list');
+  if (!container) return;
+  
+  if (allTags.length === 0) {
+    container.innerHTML = '<div class="empty-state" style="padding: 1rem; text-align: center;">No tags available</div>';
+    return;
+  }
+  
+  container.innerHTML = allTags.map(tag => `
+    <label class="tag-filter-item">
+      <input 
+        type="checkbox" 
+        value="${tag.id}" 
+        ${contentFilters.selectedTags.includes(tag.id) ? 'checked' : ''}
+      />
+      <span class="tag-color-dot" style="background-color: ${tag.color};"></span>
+      <span>${escapeHtml(tag.name)}</span>
+    </label>
+  `).join('');
+  
+  // Add event listeners to checkboxes
+  container.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
+    checkbox.addEventListener('change', handleTagFilterChange);
+  });
+}
+
+function initializeFilterListeners() {
+  // Search input
+  const searchInput = document.getElementById('content-search');
+  if (searchInput) {
+    searchInput.addEventListener('input', (e) => {
+      contentFilters.searchText = e.target.value;
+      updateFilterUI();
+      applyFilters();
+    });
+  }
+  
+  // Clear search button
+  const clearSearchBtn = document.getElementById('clear-search');
+  if (clearSearchBtn) {
+    clearSearchBtn.addEventListener('click', () => {
+      contentFilters.searchText = '';
+      const searchInput = document.getElementById('content-search');
+      if (searchInput) searchInput.value = '';
+      updateFilterUI();
+      applyFilters();
+    });
+  }
+  
+  // Tag filter button
+  const tagFilterBtn = document.getElementById('tag-filter-btn');
+  const tagFilterDropdown = document.getElementById('tag-filter-dropdown');
+  if (tagFilterBtn && tagFilterDropdown) {
+    tagFilterBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isVisible = tagFilterDropdown.style.display === 'block';
+      tagFilterDropdown.style.display = isVisible ? 'none' : 'block';
+    });
+    
+    // Close dropdown when clicking outside
+    document.addEventListener('click', (e) => {
+      if (!tagFilterDropdown.contains(e.target) && e.target !== tagFilterBtn) {
+        tagFilterDropdown.style.display = 'none';
+      }
+    });
+  }
+  
+  // Tag match mode radio buttons
+  document.querySelectorAll('input[name="tag-match"]').forEach(radio => {
+    radio.addEventListener('change', (e) => {
+      contentFilters.tagMatchMode = e.target.value;
+      applyFilters();
+    });
+  });
+  
+  // Sort select
+  const sortSelect = document.getElementById('sort-select');
+  if (sortSelect) {
+    sortSelect.addEventListener('change', (e) => {
+      contentFilters.sortBy = e.target.value;
+      applyFilters();
+    });
+  }
+  
+  // Clear all filters button
+  const clearFiltersBtn = document.getElementById('clear-filters');
+  if (clearFiltersBtn) {
+    clearFiltersBtn.addEventListener('click', () => {
+      contentFilters.searchText = '';
+      contentFilters.selectedTags = [];
+      const searchInput = document.getElementById('content-search');
+      if (searchInput) searchInput.value = '';
+      renderTagFilterList();
+      updateFilterUI();
+      applyFilters();
+    });
+  }
+}
+
+function handleTagFilterChange(e) {
+  const tagId = parseInt(e.target.value);
+  if (e.target.checked) {
+    if (!contentFilters.selectedTags.includes(tagId)) {
+      contentFilters.selectedTags.push(tagId);
+    }
+  } else {
+    contentFilters.selectedTags = contentFilters.selectedTags.filter(id => id !== tagId);
+  }
+  updateFilterUI();
+  applyFilters();
+}
+
+function updateFilterUI() {
+  // Update clear search button visibility
+  const clearSearchBtn = document.getElementById('clear-search');
+  if (clearSearchBtn) {
+    clearSearchBtn.style.display = contentFilters.searchText ? 'inline-flex' : 'none';
+  }
+  
+  // Update tag filter button badge
+  const tagFilterBtn = document.getElementById('tag-filter-btn');
+  if (tagFilterBtn) {
+    const existingBadge = tagFilterBtn.querySelector('.tag-filter-count');
+    if (contentFilters.selectedTags.length > 0) {
+      if (existingBadge) {
+        existingBadge.textContent = contentFilters.selectedTags.length;
+      } else {
+        const badge = document.createElement('span');
+        badge.className = 'tag-filter-count';
+        badge.textContent = contentFilters.selectedTags.length;
+        tagFilterBtn.appendChild(badge);
+      }
+    } else {
+      if (existingBadge) existingBadge.remove();
+    }
+  }
+  
+  // Update clear filters button visibility
+  const clearFiltersBtn = document.getElementById('clear-filters');
+  if (clearFiltersBtn) {
+    clearFiltersBtn.style.display = 
+      (contentFilters.searchText || contentFilters.selectedTags.length > 0) ? 'inline-flex' : 'none';
+  }
+}
+
+function applyFilters() {
+  let filtered = [...allContent];
+  
+  // Apply search filter
+  if (contentFilters.searchText) {
+    const searchLower = contentFilters.searchText.toLowerCase();
+    filtered = filtered.filter(item => {
+      const contentText = (item.edited_content || item.content || '').toLowerCase();
+      return contentText.includes(searchLower);
+    });
+  }
+  
+  // Apply tag filter
+  if (contentFilters.selectedTags.length > 0) {
+    filtered = filtered.filter(item => {
+      if (!item.tags || item.tags.length === 0) return false;
+      
+      const itemTagIds = item.tags.map(t => t.id);
+      
+      if (contentFilters.tagMatchMode === 'all') {
+        // Must have ALL selected tags
+        return contentFilters.selectedTags.every(tagId => itemTagIds.includes(tagId));
+      } else {
+        // Must have ANY of the selected tags
+        return contentFilters.selectedTags.some(tagId => itemTagIds.includes(tagId));
+      }
+    });
+  }
+  
+  // Apply sorting
+  filtered.sort((a, b) => {
+    switch (contentFilters.sortBy) {
+      case 'date-desc':
+        return new Date(b.created_at) - new Date(a.created_at);
+      case 'date-asc':
+        return new Date(a.created_at) - new Date(b.created_at);
+      case 'alpha-asc':
+        const aText = (a.edited_content || a.content || '').toLowerCase();
+        const bText = (b.edited_content || b.content || '').toLowerCase();
+        return aText.localeCompare(bText);
+      case 'alpha-desc':
+        const aTextDesc = (a.edited_content || a.content || '').toLowerCase();
+        const bTextDesc = (b.edited_content || b.content || '').toLowerCase();
+        return bTextDesc.localeCompare(aTextDesc);
+      default:
+        return 0;
+    }
+  });
+  
+  renderContentGrid(filtered);
+  updateResultsInfo(filtered.length, allContent.length);
+}
+
+function updateResultsInfo(filteredCount, totalCount) {
+  const infoContainer = document.getElementById('content-results-info');
+  if (!infoContainer) return;
+  
+  if (filteredCount === totalCount) {
+    infoContainer.innerHTML = '';
+  } else {
+    infoContainer.innerHTML = `
+      <div class="results-info-text">
+        Showing ${filteredCount} of ${totalCount} content items
+      </div>
+    `;
+  }
+}
+
+function renderContentGrid(content) {
+  const container = document.getElementById('content-grid');
+  if (!container) return;
+  
+  if (content.length === 0) {
+    const hasActiveFilters = contentFilters.searchText || contentFilters.selectedTags.length > 0;
+    container.innerHTML = `
+      <div class="empty-state">
+        ${hasActiveFilters 
+          ? 'No content matches your filters. Try adjusting your search or tag filters.' 
+          : 'No content yet. Execute queries and process info packages to generate content!'}
+      </div>
+    `;
+    return;
+  }
+  
+  container.innerHTML = content.map(item => {
+    const contentText = item.edited_content || item.content;
+    const preview = getPlainTextPreview(contentText);
+    
+    return `
+      <div class="content-card" onclick="window.viewContent(${item.id})">
+        <div class="content-preview markdown-preview">
+          ${preview}
+        </div>
+        ${item.tags && item.tags.length > 0 ? `
+          <div class="tags-container" onclick="event.stopPropagation()">
+            ${renderTagBadges(item.tags)}
+          </div>
+        ` : ''}
+        <div class="content-meta">
+          <span class="content-date">${new Date(item.created_at).toLocaleDateString()}</span>
+          <button class="btn-sm btn-danger" onclick="event.stopPropagation(); window.deleteContent(${item.id})">Delete</button>
+        </div>
+      </div>
+    `;
+  }).join('');
 }
 
 window.loadContentList = async function() {
   try {
     showLoading();
     const content = await api.getContent();
-    hideLoading();
-
-    const container = document.getElementById('content-grid');
-    if (content.length === 0) {
-      container.innerHTML = '<div class="empty-state">No content yet. Execute queries and process info packages to generate content!</div>';
-      return;
-    }
-
+    
     // Load tags for all content items in parallel
     const contentWithTags = await Promise.all(
       content.map(async (item) => {
@@ -61,28 +390,17 @@ window.loadContentList = async function() {
         }
       })
     );
-
-    container.innerHTML = contentWithTags.map(item => {
-      const contentText = item.edited_content || item.content;
-      const preview = getPlainTextPreview(contentText);
-      
-      return `
-        <div class="content-card" onclick="window.viewContent(${item.id})">
-          <div class="content-preview markdown-preview">
-            ${preview}
-          </div>
-          ${item.tags && item.tags.length > 0 ? `
-            <div class="tags-container" onclick="event.stopPropagation()">
-              ${renderTagBadges(item.tags)}
-            </div>
-          ` : ''}
-          <div class="content-meta">
-            <span class="content-date">${new Date(item.created_at).toLocaleDateString()}</span>
-            <button class="btn-sm btn-danger" onclick="event.stopPropagation(); window.deleteContent(${item.id})">Delete</button>
-          </div>
-        </div>
-      `;
-    }).join('');
+    
+    hideLoading();
+    
+    // Store content for filtering
+    allContent = contentWithTags;
+    
+    // Apply current filters
+    applyFilters();
+    
+    // Initialize feather icons if needed
+    if (window.feather) feather.replace();
   } catch (error) {
     hideLoading();
     showNotification('Failed to load content: ' + error.message, 'error');
@@ -155,6 +473,20 @@ window.viewContent = async (id) => {
               <div class="content-preview-area markdown-content">
                 ${renderMarkdown(content)}
               </div>
+              ${item.citations && item.citations.length > 0 ? `
+                <div class="content-citations" style="margin-top: 2rem; padding-top: 2rem; border-top: 1px solid var(--border-light);">
+                  <strong>Sources:</strong>
+                  <ul class="citations-list">
+                    ${item.citations.map((citation, idx) => `
+                      <li>
+                        <a href="${escapeHtml(citation)}" target="_blank" rel="noopener noreferrer">
+                          [${idx + 1}] ${escapeHtml(citation)}
+                        </a>
+                      </li>
+                    `).join('')}
+                  </ul>
+                </div>
+              ` : ''}
               <div class="editor-actions">
                 <button class="btn-secondary" onclick="document.getElementById('edit-mode-btn').click()">
                   <i data-feather="edit-3"></i> Edit Content

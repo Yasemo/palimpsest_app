@@ -233,7 +233,8 @@ function showModelSelectorModal(currentModelId) {
 
   // Add click handlers for model selection
   modalOverlay.querySelectorAll('.select-model-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation(); // Prevent event bubbling
       const modelId = btn.dataset.modelId;
       selectModel(modelId);
       modalOverlay.remove();

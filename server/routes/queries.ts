@@ -1,4 +1,6 @@
 import { db } from "../db/client.ts";
+import { processInfoPackageWithAI } from "../schedulers/utils.ts";
+import { openrouterIntegration } from "../integrations/openrouter.ts";
 
 export async function handleQueriesRoutes(req: Request, pathname: string): Promise<Response> {
   const url = new URL(req.url);
@@ -179,7 +181,7 @@ export async function handleQueriesRoutes(req: Request, pathname: string): Promi
   if (req.method === "POST" && pathParts.length === 2 && pathParts[1] === "queries") {
     try {
       const body = await req.json();
-      const { name, query_config, directive, schedule, next_run_at, active = true } = body;
+      const { name, query_config, directive, schedule, next_run_at, active = true, auto_process_with_ai = false } = body;
 
       if (!name || !query_config || !directive) {
         return new Response(
@@ -189,10 +191,10 @@ export async function handleQueriesRoutes(req: Request, pathname: string): Promi
       }
 
       const result = await db.query(
-        `INSERT INTO queries (name, query_config, directive, schedule, next_run_at, active) 
-         VALUES ($1, $2, $3, $4, $5, $6) 
+        `INSERT INTO queries (name, query_config, directive, schedule, next_run_at, active, auto_process_with_ai) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7) 
          RETURNING *`,
-        [name, JSON.stringify(query_config), directive, schedule, next_run_at, active]
+        [name, JSON.stringify(query_config), directive, schedule, next_run_at, active, auto_process_with_ai]
       );
 
       return new Response(JSON.stringify(result.rows[0]), {
@@ -266,7 +268,7 @@ export async function handleQueriesRoutes(req: Request, pathname: string): Promi
     try {
       const id = pathParts[2];
       const body = await req.json();
-      const { name, query_config, directive, schedule, next_run_at, active } = body;
+      const { name, query_config, directive, schedule, next_run_at, active, auto_process_with_ai } = body;
 
       const result = await db.query(
         `UPDATE queries 
@@ -275,10 +277,11 @@ export async function handleQueriesRoutes(req: Request, pathname: string): Promi
              directive = COALESCE($3, directive), 
              schedule = COALESCE($4, schedule), 
              next_run_at = COALESCE($5, next_run_at),
-             active = COALESCE($6, active)
-         WHERE id = $7 
+             active = COALESCE($6, active),
+             auto_process_with_ai = COALESCE($7, auto_process_with_ai)
+         WHERE id = $8 
          RETURNING *`,
-        [name, query_config ? JSON.stringify(query_config) : null, directive, schedule, next_run_at, active, id]
+        [name, query_config ? JSON.stringify(query_config) : null, directive, schedule, next_run_at, active, auto_process_with_ai, id]
       );
 
       if (result.rows.length === 0) {
@@ -327,9 +330,12 @@ export async function handleQueriesRoutes(req: Request, pathname: string): Promi
   if (req.method === "POST" && pathParts.length === 4 && pathParts[3] === "execute") {
     try {
       const id = pathParts[2];
+      console.log(`[Query Execute] Starting execution for query ID: ${id}`);
+      
       const queryResult = await db.query("SELECT * FROM queries WHERE id = $1", [id]);
 
       if (queryResult.rows.length === 0) {
+        console.error(`[Query Execute] Query not found: ${id}`);
         return new Response(JSON.stringify({ error: "Query not found" }), {
           status: 404,
           headers: { "Content-Type": "application/json" },
@@ -339,10 +345,19 @@ export async function handleQueriesRoutes(req: Request, pathname: string): Promi
       const query = queryResult.rows[0] as any;
       const queryConfig = query.query_config;
 
+      console.log(`[Query Execute] Query details:`, {
+        id: query.id,
+        name: query.name,
+        auto_process_with_ai: query.auto_process_with_ai
+      });
+
       // Get source IDs from query config
       const sourceIds = queryConfig.sources || [];
       
+      console.log(`[Query Execute] Source IDs to execute:`, sourceIds);
+      
       if (sourceIds.length === 0) {
+        console.warn(`[Query Execute] No sources configured for query ${id}`);
         return new Response(
           JSON.stringify({ error: "No sources configured for this query" }),
           { status: 400, headers: { "Content-Type": "application/json" } }
@@ -357,10 +372,14 @@ export async function handleQueriesRoutes(req: Request, pathname: string): Promi
       );
 
       const sources = sourcesResult.rows as any[];
+      console.log(`[Query Execute] Found ${sources.length} sources to execute`);
+      
       const sourceResults: any[] = [];
 
       // Execute each source sequentially
       for (const source of sources) {
+        console.log(`[Query Execute] Executing source ${source.id} (${source.name})`);
+        
         try {
           // Execute source via its execute endpoint logic
           const response = await fetch(
@@ -370,20 +389,39 @@ export async function handleQueriesRoutes(req: Request, pathname: string): Promi
           
           const result = await response.json();
           
+          console.log(`[Query Execute] Source ${source.id} execution completed with status: ${result.status}`);
+          
+          // Extract the actual integration data from the source_results DB row
+          // The 'data' field contains the stringified integration result with citations
+          let integrationData;
+          try {
+            integrationData = typeof result.data === 'string' ? JSON.parse(result.data) : result.data;
+            
+            // Log if citations are present
+            if (integrationData.citations && integrationData.citations.length > 0) {
+              console.log(`[Query Execute] Source ${source.id} returned ${integrationData.citations.length} citations`);
+            }
+          } catch (parseError) {
+            console.error(`[Query Execute] Failed to parse source result data for source ${source.id}:`, parseError);
+            integrationData = result.data;
+          }
+          
           sourceResults.push({
             sourceId: source.id,
             sourceName: source.name,
             sourceType: source.type,
-            result: result,
-            status: response.ok ? "success" : "error",
+            data: integrationData,  // Store the parsed integration data with citations
+            status: result.status || (response.ok ? "success" : "error"),
             executedAt: new Date().toISOString()
           });
         } catch (error) {
+          console.error(`[Query Execute] Source ${source.id} execution failed:`, (error as Error).message);
+          
           sourceResults.push({
             sourceId: source.id,
             sourceName: source.name,
             sourceType: source.type,
-            result: { error: (error as Error).message },
+            data: { error: (error as Error).message },
             status: "error",
             executedAt: new Date().toISOString()
           });
@@ -424,6 +462,35 @@ export async function handleQueriesRoutes(req: Request, pathname: string): Promi
           `INSERT INTO info_package_tags (info_package_id, tag_id) VALUES ${values}`,
           params
         );
+      }
+
+      // Check if auto-process with AI is enabled
+      console.log(`[MANUAL-EXEC] Query ${id} auto_process_with_ai setting: ${query.auto_process_with_ai}`);
+      if (query.auto_process_with_ai) {
+        console.log(`[MANUAL-EXEC] Auto-processing enabled, triggering AI processing for info package ${infoPackage.id}`);
+        try {
+          const content = await processInfoPackageWithAI(db, infoPackage.id, openrouterIntegration);
+          console.log(`[MANUAL-EXEC] Auto-processing successful, content ID: ${content.id}`);
+          return new Response(JSON.stringify({
+            infoPackage,
+            content,
+            autoProcessed: true
+          }), {
+            headers: { "Content-Type": "application/json" },
+          });
+        } catch (error) {
+          console.error(`[MANUAL-EXEC] Failed to auto-process info package ${infoPackage.id}:`, error);
+          // Return the info package anyway, but note the processing failed
+          return new Response(JSON.stringify({
+            infoPackage,
+            autoProcessed: false,
+            autoProcessError: (error as Error).message
+          }), {
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+      } else {
+        console.log(`[MANUAL-EXEC] Auto-processing disabled, returning info package ${infoPackage.id} only`);
       }
 
       return new Response(JSON.stringify(infoPackage), {

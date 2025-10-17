@@ -1,6 +1,7 @@
 import { db } from "../db/client.ts";
 import { openrouterIntegration } from "../integrations/openrouter.ts";
 import { config } from "../config.ts";
+import { processInfoPackageWithAI } from "../schedulers/utils.ts";
 
 export async function handleAIRoutes(req: Request, pathname: string): Promise<Response> {
   const pathParts = pathname.split("/").filter(Boolean);
@@ -44,21 +45,40 @@ export async function handleAIRoutes(req: Request, pathname: string): Promise<Re
       const body = await req.json();
       const { model, system_prompt, temperature } = body;
 
+      console.log('[AI Config] Updating configuration:', { model, temperature, hasSystemPrompt: !!system_prompt });
+
+      // Use INSERT ... ON CONFLICT to handle both insert and update
       const result = await db.query(
-        `UPDATE ai_config 
-         SET model = COALESCE($1, model), 
-             system_prompt = COALESCE($2, system_prompt), 
-             temperature = COALESCE($3, temperature)
-         WHERE id = 1 
+        `INSERT INTO ai_config (id, model, system_prompt, temperature) 
+         VALUES (1, $1, $2, $3)
+         ON CONFLICT (id) 
+         DO UPDATE SET 
+           model = COALESCE(EXCLUDED.model, ai_config.model),
+           system_prompt = COALESCE(EXCLUDED.system_prompt, ai_config.system_prompt),
+           temperature = COALESCE(EXCLUDED.temperature, ai_config.temperature)
          RETURNING *`,
         [model, system_prompt, temperature]
       );
 
+      console.log('[AI Config] Configuration updated successfully');
+
+      if (result.rows.length === 0) {
+        console.error('[AI Config] No rows returned from query');
+        return new Response(JSON.stringify({ error: 'Failed to save configuration' }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
       return new Response(JSON.stringify(result.rows[0]), {
+        status: 200,
         headers: { "Content-Type": "application/json" },
       });
     } catch (error) {
-      return new Response(JSON.stringify({ error: (error as Error).message }), {
+      console.error('[AI Config] Error updating configuration:', error);
+      return new Response(JSON.stringify({ 
+        error: (error as Error).message || 'Failed to update AI configuration'
+      }), {
         status: 500,
         headers: { "Content-Type": "application/json" },
       });
@@ -98,83 +118,20 @@ export async function handleAIRoutes(req: Request, pathname: string): Promise<Re
   // POST /api/ai/process/:packageId - Process an info package with AI
   if (req.method === "POST" && pathParts.length === 4 && pathParts[2] === "process") {
     try {
-      const packageId = pathParts[3];
+      const packageId = parseInt(pathParts[3]);
+      
+      console.log(`[AI Route] Manual processing requested for info package ${packageId}`);
 
-      // Get the info package
-      const packageResult = await db.query(
-        "SELECT * FROM info_packages WHERE id = $1",
-        [packageId]
-      );
+      // Use the shared processing function that has all logging and citations extraction
+      const content = await processInfoPackageWithAI(db, packageId, openrouterIntegration);
 
-      if (packageResult.rows.length === 0) {
-        return new Response(JSON.stringify({ error: "Info package not found" }), {
-          status: 404,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-
-      const infoPackage = packageResult.rows[0] as any;
-
-      // Get AI config with fallback to defaults
-      const configResult = await db.query("SELECT * FROM ai_config WHERE id = 1");
-      const aiConfig = configResult.rows[0] as any || {
-        model: config.ai.defaultModel,
-        system_prompt: "You are a helpful AI assistant that processes information and creates well-structured content.",
-        temperature: 0.7
-      };
-
-      // Ensure model is set (fallback to env variable if not)
-      if (!aiConfig.model) {
-        aiConfig.model = config.ai.defaultModel;
-      }
-
-      // Construct the user prompt with the info package data and directive
-      const userPrompt = `${infoPackage.directive}\n\nHere is the data to work with:\n${JSON.stringify(infoPackage.data, null, 2)}`;
-
-      // Call OpenRouter to process
-      const aiResponse = await openrouterIntegration.execute({
-        model: aiConfig.model,
-        systemPrompt: aiConfig.system_prompt,
-        userPrompt,
-        temperature: aiConfig.temperature,
-      });
-
-      // Store the AI response in content table
-      const contentResult = await db.query(
-        `INSERT INTO content (info_package_id, content, chat_history) 
-         VALUES ($1, $2, $3) 
-         RETURNING *`,
-        [packageId, aiResponse.content, JSON.stringify([])]
-      );
-
-      const content = contentResult.rows[0] as any;
-
-      // Copy tags from info package to content
-      const tagsResult = await db.query(
-        `SELECT tag_id FROM info_package_tags WHERE info_package_id = $1`,
-        [packageId]
-      );
-
-      if (tagsResult.rows.length > 0) {
-        const tagIds = tagsResult.rows.map((row: any) => row.tag_id);
-        const values = tagIds.map((_tagId: any, i: number) => `($1, $${i + 2})`).join(", ");
-        const params = [content.id, ...tagIds];
-        await db.query(
-          `INSERT INTO content_tags (content_id, tag_id) VALUES ${values}`,
-          params
-        );
-      }
-
-      // Mark info package as processed
-      await db.query(
-        "UPDATE info_packages SET processed = true WHERE id = $1",
-        [packageId]
-      );
+      console.log(`[AI Route] Processing completed, content ID: ${content.id}`);
 
       return new Response(JSON.stringify(content), {
         headers: { "Content-Type": "application/json" },
       });
     } catch (error) {
+      console.error(`[AI Route] Processing failed:`, error);
       return new Response(JSON.stringify({ error: (error as Error).message }), {
         status: 500,
         headers: { "Content-Type": "application/json" },

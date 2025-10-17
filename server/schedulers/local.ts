@@ -2,7 +2,7 @@ import { db } from "../db/client.ts";
 import { perplexityIntegration } from "../integrations/perplexity.ts";
 import { openrouterIntegration } from "../integrations/openrouter.ts";
 import { gmailIntegration } from "../integrations/gmail.ts";
-import { parseScheduleAndGetNextRun, formatDateForLog, formatDuration } from "./utils.ts";
+import { parseScheduleAndGetNextRun, formatDateForLog, formatDuration, processInfoPackageWithAI } from "./utils.ts";
 
 // Local scheduler using setInterval for development environment
 // Note: For production, use Google Cloud Scheduler
@@ -205,10 +205,46 @@ export function startLocalScheduler() {
           }
 
           // Create info package with improved data structure
-          await db.query(
-            "INSERT INTO info_packages (query_id, data, directive, processed) VALUES ($1, $2, $3, false)",
+          const infoPackageResult = await db.query(
+            "INSERT INTO info_packages (query_id, data, directive, processed) VALUES ($1, $2, $3, false) RETURNING *",
             [queryData.id, JSON.stringify(data), queryData.directive]
           );
+          
+          const infoPackage = infoPackageResult.rows[0] as any;
+          
+          // Copy tags from query to info package
+          const tagsResult = await db.query(
+            `SELECT tag_id FROM query_tags WHERE query_id = $1`,
+            [queryData.id]
+          );
+
+          if (tagsResult.rows.length > 0) {
+            const tagIds = tagsResult.rows.map((row: any) => row.tag_id);
+            const values = tagIds.map((_tagId: any, i: number) => `($1, $${i + 2})`).join(", ");
+            const params = [infoPackage.id, ...tagIds];
+            await db.query(
+              `INSERT INTO info_package_tags (info_package_id, tag_id) VALUES ${values}`,
+              params
+            );
+          }
+          
+          // Check if auto-process with AI is enabled
+          console.log(`[QUERY-BATCH]   → Checking auto_process_with_ai flag: ${queryData.auto_process_with_ai}`);
+          if (queryData.auto_process_with_ai) {
+            console.log(`[QUERY-BATCH]   → Auto-processing with AI is ENABLED, triggering AI processing for info package ${infoPackage.id}`);
+            try {
+              const aiStartTime = new Date();
+              const content = await processInfoPackageWithAI(db, infoPackage.id, openrouterIntegration);
+              const aiEndTime = new Date();
+              const aiDuration = formatDuration(aiStartTime, aiEndTime);
+              console.log(`[QUERY-BATCH]   → ✓ AI content generated in ${aiDuration} (Content ID: ${content.id})`);
+            } catch (error) {
+              console.error(`[QUERY-BATCH]   → ✗ AI processing failed: ${(error as Error).message}`);
+              console.error(`[QUERY-BATCH]   → Error details:`, error);
+            }
+          } else {
+            console.log(`[QUERY-BATCH]   → Auto-processing with AI is DISABLED, skipping AI processing`);
+          }
 
           // Calculate next run time based on schedule
           const scheduleInfo = parseScheduleAndGetNextRun(queryData.schedule);
@@ -293,64 +329,180 @@ export function startLocalScheduler() {
     }
   }, 15 * 60 * 1000); // 15 minutes
 
-  // Execute scheduled outputs every 30 minutes
+  // Execute scheduled outputs every 1 minute (checking next_run_at like queries)
   setInterval(async () => {
-    console.log("Checking for scheduled outputs...");
+    const checkTime = new Date();
+    console.log(`[OUTPUT-SCHEDULER] Checking for scheduled outputs... (${formatDateForLog(checkTime)})`);
+    
     try {
+      // Select only outputs that are due to run (next_run_at <= NOW)
       const outputs = await db.query(
-        "SELECT * FROM outputs WHERE active = true AND schedule IS NOT NULL"
+        `SELECT * FROM outputs 
+         WHERE active = true 
+         AND schedule IS NOT NULL 
+         AND (next_run_at IS NULL OR next_run_at <= NOW())
+         ORDER BY next_run_at ASC NULLS FIRST`
       );
+
+      if (outputs.rows.length === 0) {
+        console.log("[OUTPUT-SCHEDULER] No outputs due for execution");
+        return;
+      }
+
+      console.log(`[OUTPUT-SCHEDULER] Found ${outputs.rows.length} output${outputs.rows.length !== 1 ? 's' : ''} due for execution`);
 
       for (const output of outputs.rows) {
         const outputData = output as any;
-        console.log(`Executing output: ${outputData.name}`);
+        const startTime = new Date();
+        console.log(`[OUTPUT-SCHEDULER] Executing: "${outputData.name}" (ID: ${outputData.id})`);
         
         try {
           const outputConfig = outputData.config;
-          const fromDate = outputConfig.from_date || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-          const toDate = outputConfig.to_date || new Date().toISOString();
-
-          const contentQuery = await db.query(
-            "SELECT * FROM content WHERE created_at >= $1 AND created_at <= $2 ORDER BY created_at DESC",
-            [fromDate, toDate]
+          
+          // This is now handled by the /api/outputs/:id/execute endpoint logic
+          // We'll call that same logic here
+          
+          // Get tag IDs for this output
+          const tagResult = await db.query(
+            "SELECT tag_id FROM output_tags WHERE output_id = $1",
+            [outputData.id]
           );
+          const tagIds = tagResult.rows.map((row: any) => row.tag_id);
 
+          // Calculate cutoff date based on config
+          let cutoffDate: Date;
+          const cutoffDays = outputConfig.cutoff_days;
+          
+          if (cutoffDays === -1) {
+            // All time
+            cutoffDate = new Date(0);
+          } else if (cutoffDays) {
+            cutoffDate = new Date(Date.now() - cutoffDays * 24 * 60 * 60 * 1000);
+          } else {
+            // Default to last 7 days
+            cutoffDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+          }
+
+          // Query content based on tags and date cutoff
+          let contentQuery;
+          if (tagIds.length > 0) {
+            // Build placeholders for tag IDs
+            const tagPlaceholders = tagIds.map((_: any, i: number) => `$${i + 2}`).join(',');
+            
+            contentQuery = await db.query(
+              `SELECT DISTINCT c.* FROM content c
+               JOIN content_tags ct ON c.id = ct.content_id
+               WHERE ct.tag_id IN (${tagPlaceholders})
+               AND c.created_at >= $1
+               ORDER BY c.created_at DESC`,
+              [cutoffDate.toISOString(), ...tagIds]
+            );
+          } else {
+            contentQuery = await db.query(
+              `SELECT * FROM content 
+               WHERE created_at >= $1
+               ORDER BY c.created_at DESC`,
+              [cutoffDate.toISOString()]
+            );
+          }
+
+          const contentItems = contentQuery.rows;
           const contentIds: number[] = [];
           const results: any[] = [];
 
           if (outputData.type === "gmail") {
-            for (const content of contentQuery.rows) {
-              const contentData = content as any;
-              contentIds.push(contentData.id);
-
-              try {
-                const emailBody = contentData.edited_content || contentData.content;
-                const gmailResult = await gmailIntegration.execute({
-                  to: outputConfig.recipient || "default@example.com",
-                  subject: outputConfig.subject || "Content from Palimpsest",
-                  body: emailBody,
-                  contentType: outputConfig.content_type || "text/plain",
+            try {
+              // Handle both old (recipient) and new (recipients) formats
+              const recipients = outputConfig.recipients || [outputConfig.recipient || "default@example.com"];
+              const toField = recipients.join(', ');
+              
+              // Prepare content items with dates and citations for HTML template
+              const contentItemsForEmail: Array<{content: string, date: string, citations: string[]}> = [];
+              
+              for (const content of contentItems) {
+                const contentData = content as any;
+                const contentText = contentData.edited_content || contentData.content;
+                const dateStr = new Date(contentData.created_at).toLocaleString();
+                const citations = contentData.citations || [];
+                
+                contentItemsForEmail.push({
+                  content: contentText,
+                  date: dateStr,
+                  citations: citations
                 });
-
-                results.push({ contentId: contentData.id, success: true, result: gmailResult });
-              } catch (error) {
-                results.push({ contentId: contentData.id, success: false, error: (error as Error).message });
+                
+                contentIds.push(contentData.id);
               }
+              
+              // Use styled HTML email with output title
+              const gmailResult = await gmailIntegration.sendStyledEmail({
+                to: toField,
+                subject: outputConfig.subject || "Content from Palimpsest",
+                contentItems: contentItemsForEmail,
+                labels: outputConfig.labels || [],
+                outputTitle: outputData.name,
+              });
+
+              results.push({ success: true, result: gmailResult });
+            } catch (error) {
+              results.push({ success: false, error: (error as Error).message });
             }
           }
 
+          // Format contentIds as PostgreSQL array literal
+          const pgArrayFormat = contentIds.length > 0 ? `{${contentIds.join(',')}}` : '{}';
+          
+          // Combine all content for logging
+          const combinedContent = contentItems.map((c: any) => 
+            c.edited_content || c.content
+          ).join("\n\n---\n\n");
+          
           await db.query(
-            "INSERT INTO output_logs (output_id, content_ids, status, details) VALUES ($1, $2, $3, $4)",
-            [outputData.id, contentIds, "success", JSON.stringify(results)]
+            `INSERT INTO output_logs (output_id, content_ids, status, details, output_content) 
+             VALUES ($1, $2, $3, $4, $5)`,
+            [outputData.id, pgArrayFormat, "success", JSON.stringify(results), combinedContent]
           );
+
+          // Calculate next run time based on schedule
+          const scheduleInfo = parseScheduleAndGetNextRun(outputData.schedule);
+          
+          // Update next_run_at for this output
+          await db.query(
+            "UPDATE outputs SET next_run_at = $1 WHERE id = $2",
+            [scheduleInfo.nextRunAt, outputData.id]
+          );
+
+          const endTime = new Date();
+          const duration = formatDuration(startTime, endTime);
+          
+          console.log(`[OUTPUT-SCHEDULER] ✓ Completed: "${outputData.name}" in ${duration}`);
+          console.log(`[OUTPUT-SCHEDULER]   → Schedule: ${scheduleInfo.description}`);
+          console.log(`[OUTPUT-SCHEDULER]   → Next run: ${formatDateForLog(scheduleInfo.nextRunAt)}`);
+          console.log(`[OUTPUT-SCHEDULER]   → Content items: ${contentIds.length}`);
+          
         } catch (error) {
-          console.error(`Error executing output ${outputData.name}:`, error);
+          const endTime = new Date();
+          const duration = formatDuration(startTime, endTime);
+          console.error(`[OUTPUT-SCHEDULER] ✗ Failed: "${outputData.name}" after ${duration}`);
+          console.error(`[OUTPUT-SCHEDULER]   → Error: ${(error as Error).message}`);
+          
+          // Still update next_run_at even on failure
+          try {
+            const scheduleInfo = parseScheduleAndGetNextRun(outputData.schedule);
+            await db.query(
+              "UPDATE outputs SET next_run_at = $1 WHERE id = $2",
+              [scheduleInfo.nextRunAt, outputData.id]
+            );
+            console.log(`[OUTPUT-SCHEDULER]   → Rescheduled for: ${formatDateForLog(scheduleInfo.nextRunAt)}`);
+          } catch (rescheduleError) {
+            console.error(`[OUTPUT-SCHEDULER]   → Failed to reschedule: ${(rescheduleError as Error).message}`);
+          }
         }
       }
     } catch (error) {
-      console.error("Error in output scheduler:", error);
+      console.error("[OUTPUT-SCHEDULER] Error in output scheduler:", error);
     }
-  }, 30 * 60 * 1000); // 30 minutes
+  }, 1 * 60 * 1000); // Check every 1 minute
 
   console.log("Local scheduler started successfully!");
 }

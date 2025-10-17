@@ -109,6 +109,7 @@ export class OpenRouterIntegration extends Integration {
 
     const data = await response.json();
     
+    console.log("[OpenRouter] 📥 Full API Response:", JSON.stringify(data, null, 2));
     console.log("[OpenRouter] ✅ Response received");
     console.log("[OpenRouter] Request Duration:", duration, "ms");
     console.log("[OpenRouter] Model Used:", data.model);
