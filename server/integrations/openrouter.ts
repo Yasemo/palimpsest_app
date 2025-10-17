@@ -187,6 +187,31 @@ export class OpenRouterIntegration extends Integration {
     return data.data || [];
   }
 
+  // Get current credit balance from OpenRouter
+  async getCredits(): Promise<{ balance: number; total_credits: number; total_usage: number }> {
+    const response = await fetch("https://openrouter.ai/api/v1/credits", {
+      method: "GET",
+      headers: {
+        "Authorization": `Bearer ${config.openrouter.apiKey}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch OpenRouter credits: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const { total_credits, total_usage } = data.data;
+    const balance = total_credits - total_usage;
+
+    return {
+      balance,
+      total_credits,
+      total_usage,
+    };
+  }
+
   getConfigSchema(): object {
     return {
       type: "object",

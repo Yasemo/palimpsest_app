@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { showLoading, hideLoading, showNotification } from '../router.js';
 import Modal from './modal.js';
+import { renderTagBadges } from './tags.js';
 
 // Markdown renderer with sanitization
 function renderMarkdown(text) {
@@ -48,7 +49,20 @@ window.loadContentList = async function() {
       return;
     }
 
-    container.innerHTML = content.map(item => {
+    // Load tags for all content items in parallel
+    const contentWithTags = await Promise.all(
+      content.map(async (item) => {
+        try {
+          const tags = await api.getContentTags(item.id);
+          return { ...item, tags };
+        } catch (error) {
+          console.error(`Failed to load tags for content ${item.id}:`, error);
+          return { ...item, tags: [] };
+        }
+      })
+    );
+
+    container.innerHTML = contentWithTags.map(item => {
       const contentText = item.edited_content || item.content;
       const preview = getPlainTextPreview(contentText);
       
@@ -57,6 +71,11 @@ window.loadContentList = async function() {
           <div class="content-preview markdown-preview">
             ${preview}
           </div>
+          ${item.tags && item.tags.length > 0 ? `
+            <div class="tags-container" onclick="event.stopPropagation()">
+              ${renderTagBadges(item.tags)}
+            </div>
+          ` : ''}
           <div class="content-meta">
             <span class="content-date">${new Date(item.created_at).toLocaleDateString()}</span>
             <button class="btn-sm btn-danger" onclick="event.stopPropagation(); window.deleteContent(${item.id})">Delete</button>
@@ -73,10 +92,11 @@ window.loadContentList = async function() {
 window.viewContent = async (id) => {
   try {
     showLoading();
-    const [item, models, editorConfig] = await Promise.all([
+    const [item, models, editorConfig, tags] = await Promise.all([
       api.getContentItem(id),
       api.getAIModels(),
-      api.request('/api/content/editor-config')
+      api.request('/api/content/editor-config'),
+      api.getContentTags(id).catch(() => [])
     ]);
     hideLoading();
 
@@ -113,6 +133,12 @@ window.viewContent = async (id) => {
                 </button>
               </div>
             </div>
+            
+            ${tags && tags.length > 0 ? `
+              <div class="tags-container" style="padding: 0 1rem 0.5rem 1rem;">
+                ${renderTagBadges(tags)}
+              </div>
+            ` : ''}
             
             <!-- Edit Mode -->
             <div class="content-mode" id="edit-mode" style="display: none;">
@@ -410,6 +436,9 @@ window.sendChatMessage = async (id) => {
 
   try {
     const result = await api.chatWithContent(id, message, currentContent, selectedModel);
+    
+    // Dispatch event to refresh credit balance
+    document.dispatchEvent(new Event('ai-operation-complete'));
     
     // Remove typing indicator
     const typingIndicator = document.getElementById('typing-indicator');

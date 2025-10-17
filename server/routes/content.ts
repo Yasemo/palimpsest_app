@@ -6,6 +6,67 @@ export async function handleContentRoutes(req: Request, pathname: string): Promi
   const url = new URL(req.url);
   const pathParts = pathname.split("/").filter(Boolean);
 
+  // GET /api/content/:id/tags - Get tags for content
+  if (req.method === "GET" && pathParts.length === 4 && pathParts[1] === "content" && pathParts[3] === "tags") {
+    try {
+      const contentId = pathParts[2];
+      const result = await db.query(
+        `SELECT t.* FROM tags t
+         INNER JOIN content_tags ct ON t.id = ct.tag_id
+         WHERE ct.content_id = $1
+         ORDER BY t.name ASC`,
+        [contentId]
+      );
+
+      return new Response(JSON.stringify(result.rows), {
+        headers: { "Content-Type": "application/json" },
+      });
+    } catch (error) {
+      return new Response(JSON.stringify({ error: (error as Error).message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  }
+
+  // POST /api/content/:id/tags - Set tags for content
+  if (req.method === "POST" && pathParts.length === 4 && pathParts[1] === "content" && pathParts[3] === "tags") {
+    try {
+      const contentId = pathParts[2];
+      const body = await req.json();
+      const { tag_ids } = body;
+
+      if (!Array.isArray(tag_ids)) {
+        return new Response(
+          JSON.stringify({ error: "tag_ids must be an array" }),
+          { status: 400, headers: { "Content-Type": "application/json" } }
+        );
+      }
+
+      // Delete existing tags
+      await db.query("DELETE FROM content_tags WHERE content_id = $1", [contentId]);
+
+      // Insert new tags
+      if (tag_ids.length > 0) {
+        const values = tag_ids.map((_tagId: any, i: number) => `($1, $${i + 2})`).join(", ");
+        const params = [contentId, ...tag_ids];
+        await db.query(
+          `INSERT INTO content_tags (content_id, tag_id) VALUES ${values}`,
+          params
+        );
+      }
+
+      return new Response(JSON.stringify({ success: true }), {
+        headers: { "Content-Type": "application/json" },
+      });
+    } catch (error) {
+      return new Response(JSON.stringify({ error: (error as Error).message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  }
+
   // GET /api/content/editor-config - Get content editor default model
   if (req.method === "GET" && pathParts.length === 3 && pathParts[2] === "editor-config") {
     return new Response(JSON.stringify({

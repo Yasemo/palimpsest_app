@@ -5,6 +5,7 @@ import { handleQueriesRoutes } from "./routes/queries.ts";
 import { handleAIRoutes } from "./routes/ai.ts";
 import { handleContentRoutes } from "./routes/content.ts";
 import { handleOutputsRoutes } from "./routes/outputs.ts";
+import { handleTagsRoutes } from "./routes/tags.ts";
 import { startLocalScheduler } from "./schedulers/local.ts";
 import { perplexityIntegration } from "./integrations/perplexity.ts";
 import { openrouterIntegration } from "./integrations/openrouter.ts";
@@ -91,6 +92,14 @@ async function handler(req: Request): Promise<Response> {
 
     if (pathname.startsWith("/api/outputs")) {
       const response = await handleOutputsRoutes(req, pathname);
+      Object.entries(corsHeaders).forEach(([key, value]) => {
+        response.headers.set(key, value);
+      });
+      return response;
+    }
+
+    if (pathname.startsWith("/api/tags")) {
+      const response = await handleTagsRoutes(req, pathname);
       Object.entries(corsHeaders).forEach(([key, value]) => {
         response.headers.set(key, value);
       });

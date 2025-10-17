@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { showLoading, hideLoading, showNotification } from '../router.js';
 import Modal, { confirm } from './modal.js';
+import { TagInput, renderTagBadges } from './tags.js';
 
 let currentQueries = [];
 let currentSources = [];
@@ -334,7 +335,7 @@ function applyFilters() {
   renderPackagesGrid();
 }
 
-function renderPackagesGrid() {
+async function renderPackagesGrid() {
   const container = document.getElementById('packages-grid');
   const start = currentPackagesPage * packagesPerPage;
   const end = start + packagesPerPage;
@@ -351,7 +352,20 @@ function renderPackagesGrid() {
     return;
   }
 
-  container.innerHTML = pagePackages.map(pkg => {
+  // Load tags for all packages in parallel
+  const packagesWithTags = await Promise.all(
+    pagePackages.map(async (pkg) => {
+      try {
+        const tags = await api.getInfoPackageTags(pkg.id);
+        return { ...pkg, tags };
+      } catch (error) {
+        console.error(`Failed to load tags for package ${pkg.id}:`, error);
+        return { ...pkg, tags: [] };
+      }
+    })
+  );
+
+  container.innerHTML = packagesWithTags.map(pkg => {
     const data = typeof pkg.data === 'string' ? JSON.parse(pkg.data) : pkg.data;
     const summary = data.executionSummary || {};
     
@@ -385,6 +399,11 @@ function renderPackagesGrid() {
               </div>
             ` : ''}
           </div>
+          ${pkg.tags && pkg.tags.length > 0 ? `
+            <div class="tags-container">
+              ${renderTagBadges(pkg.tags)}
+            </div>
+          ` : ''}
         </div>
         
         <div class="card-actions">
@@ -432,7 +451,7 @@ function setupPagination() {
   });
 }
 
-function renderQueriesList() {
+async function renderQueriesList() {
   const container = document.getElementById('queries-list');
   const start = currentQueriesPage * queriesPerPage;
   const end = start + queriesPerPage;
@@ -449,7 +468,20 @@ function renderQueriesList() {
     return;
   }
 
-  container.innerHTML = pageQueries.map(query => {
+  // Load tags for all queries in parallel
+  const queriesWithTags = await Promise.all(
+    pageQueries.map(async (query) => {
+      try {
+        const tags = await api.getQueryTags(query.id);
+        return { ...query, tags };
+      } catch (error) {
+        console.error(`Failed to load tags for query ${query.id}:`, error);
+        return { ...query, tags: [] };
+      }
+    })
+  );
+
+  container.innerHTML = queriesWithTags.map(query => {
     const config = typeof query.query_config === 'string' 
       ? JSON.parse(query.query_config) 
       : query.query_config;
@@ -484,6 +516,11 @@ function renderQueriesList() {
               <span class="value query-directive">${escapeHtml(query.directive)}</span>
             </div>
           </div>
+          ${query.tags && query.tags.length > 0 ? `
+            <div class="tags-container">
+              ${renderTagBadges(query.tags)}
+            </div>
+          ` : ''}
         </div>
         
         <div class="card-actions">
@@ -723,6 +760,12 @@ function showQueryModal(query = null) {
         </div>
 
         <div class="form-section">
+          <h4>Tags</h4>
+          <p class="text-muted">Organize and categorize this query batch</p>
+          <div id="tag-input-container"></div>
+        </div>
+
+        <div class="form-section">
           <h4>Schedule Configuration</h4>
           
           <div class="form-row">
@@ -831,6 +874,27 @@ function showQueryModal(query = null) {
   ['schedule-time', 'interval-type', 'interval-value', 'end-date'].forEach(id => {
     document.getElementById(id)?.addEventListener('change', updateSchedulePreview);
   });
+
+  // Initialize tag input component
+  const tagContainer = document.getElementById('tag-input-container');
+  let tagInput = null;
+  if (tagContainer) {
+    tagInput = new TagInput(tagContainer);
+    
+    // Load existing tags if editing
+    if (isEdit && query?.id) {
+      api.getQueryTags(query.id).then(tags => {
+        if (tags && tags.length > 0) {
+          tagInput.setTags(tags.map(t => t.id));
+        }
+      }).catch(error => {
+        console.error('Failed to load query tags:', error);
+      });
+    }
+  }
+  
+  // Store tagInput reference on modal for access in save function
+  modal.tagInput = tagInput;
 }
 
 function updateSchedulePreview() {
@@ -1014,12 +1078,20 @@ async function saveQuery(formData, queryId, modal) {
       active: formData.active
     };
     
+    let savedQuery;
     if (queryId) {
-      await api.updateQuery(queryId, queryData);
+      savedQuery = await api.updateQuery(queryId, queryData);
       showNotification('Query batch updated successfully', 'success');
     } else {
-      await api.createQuery(queryData);
+      savedQuery = await api.createQuery(queryData);
       showNotification('Query batch created successfully', 'success');
+    }
+    
+    // Save tags if tagInput exists
+    if (modal.tagInput) {
+      const tagIds = modal.tagInput.getSelectedTagIds();
+      const queryIdToUpdate = queryId || savedQuery.id;
+      await api.setQueryTags(queryIdToUpdate, tagIds);
     }
     
     modal.close();
@@ -1047,7 +1119,7 @@ window.executeQueryBatch = async (id) => {
       currentSources.find(s => s.id === sourceId)
     ).filter(s => s);
 
-    // Show execution progress modal
+    // Show execution progress modal with detailed source tracking
     const progressModal = new Modal();
     progressModal.create({
       title: 'Executing Query Batch',
@@ -1074,91 +1146,58 @@ window.executeQueryBatch = async (id) => {
       actions: []
     });
 
-    const sourceResults = [];
-    
-    // Execute each source sequentially with visual feedback
-    for (let i = 0; i < sources.length; i++) {
-      const source = sources[i];
-      const statusItem = progressModal.modalElement.querySelector(`#source-${source.id}`);
-      const progressFill = progressModal.modalElement.querySelector('.progress-fill');
+    // Initialize feather icons
+    if (window.feather) feather.replace();
+
+    try {
+      // Start a simulated progress update (since backend does it all at once)
+      let currentSourceIndex = 0;
+      const progressInterval = setInterval(() => {
+        if (currentSourceIndex < sources.length) {
+          const source = sources[currentSourceIndex];
+          const statusItem = progressModal.modalElement.querySelector(`#source-${source.id}`);
+          
+          if (statusItem) {
+            statusItem.querySelector('.execution-icon').innerHTML = '<i data-feather="loader"></i>';
+            if (window.feather) feather.replace();
+            statusItem.querySelector('.execution-status-text').textContent = 'Executing...';
+            statusItem.style.fontWeight = 'bold';
+          }
+          
+          // Update progress bar
+          const progressFill = progressModal.modalElement.querySelector('.progress-fill');
+          if (progressFill) {
+            const progress = ((currentSourceIndex + 1) / sources.length) * 90; // Reserve last 10% for completion
+            progressFill.style.width = `${progress}%`;
+          }
+          
+          currentSourceIndex++;
+        }
+      }, 500); // Update every 500ms to show progress
+
+      // Use the backend execute endpoint which handles everything including tag propagation
+      const infoPackage = await api.executeQuery(id);
       
-      // Update to "executing" status
-      if (statusItem) {
-        statusItem.querySelector('.execution-icon').innerHTML = '<i data-feather="loader"></i>';
-        feather.replace();
-        statusItem.querySelector('.execution-status-text').textContent = 'Executing...';
-        statusItem.style.fontWeight = 'bold';
-      }
+      // Clear the interval
+      clearInterval(progressInterval);
       
-      try {
-        // Execute the source
-        const result = await api.executeSource(source.id);
-        
-        // Update to "success" status
+      // Mark all sources as complete
+      sources.forEach(source => {
+        const statusItem = progressModal.modalElement.querySelector(`#source-${source.id}`);
         if (statusItem) {
           statusItem.querySelector('.execution-icon').innerHTML = '<i data-feather="check-circle"></i>';
-          feather.replace();
+          if (window.feather) feather.replace();
           statusItem.querySelector('.execution-status-text').textContent = 'Complete';
           statusItem.style.color = 'var(--success)';
           statusItem.style.fontWeight = 'normal';
         }
-        
-        sourceResults.push({
-          sourceId: source.id,
-          sourceName: source.name,
-          sourceType: source.type,
-          result: result,
-          status: 'success',
-          executedAt: new Date().toISOString()
-        });
-        
-      } catch (error) {
-        // Update to "error" status
-        if (statusItem) {
-          statusItem.querySelector('.execution-icon').innerHTML = '<i data-feather="x-circle"></i>';
-          feather.replace();
-          statusItem.querySelector('.execution-status-text').textContent = 'Failed';
-          statusItem.style.color = 'var(--error)';
-          statusItem.style.fontWeight = 'normal';
-        }
-        
-        sourceResults.push({
-          sourceId: source.id,
-          sourceName: source.name,
-          sourceType: source.type,
-          result: { error: error.message },
-          status: 'error',
-          executedAt: new Date().toISOString()
-        });
-      }
-      
-      // Update progress bar
-      if (progressFill) {
-        const progress = ((i + 1) / sources.length) * 100;
-        progressFill.style.width = `${progress}%`;
-      }
-    }
-    
-    // Create info package with the executed results
-    const packageData = {
-      sources: sourceResults,
-      queryTitle: query.name,
-      executionSummary: {
-        totalSources: sources.length,
-        successCount: sourceResults.filter(r => r.status === 'success').length,
-        errorCount: sourceResults.filter(r => r.status === 'error').length,
-      }
-    };
-    
-    try {
-      const infoPackage = await api.request('/api/info-packages', {
-        method: 'POST',
-        body: JSON.stringify({
-          query_id: id,
-          data: packageData,
-          directive: query.directive
-        })
       });
+      
+      // Update progress to complete
+      const progressFill = progressModal.modalElement.querySelector('.progress-fill');
+      if (progressFill) {
+        progressFill.style.width = '100%';
+      }
       
       // Refresh the packages list
       await loadAllPackages();
@@ -1169,13 +1208,27 @@ window.executeQueryBatch = async (id) => {
         <button class="btn btn-primary" onclick="this.closest('.modal-overlay').remove(); window.viewPackageDetails(${infoPackage.id})">View Info Package</button>
       `;
       
-      showNotification('Info package created successfully!', 'success');
+      showNotification('Info package created successfully with tags!', 'success');
     } catch (error) {
-      // If package creation fails, still allow closing the modal
+      // Update modal with error
+      const statusDiv = progressModal.modalElement.querySelector('#execution-status');
+      if (statusDiv) {
+        // Mark current executing source as failed if any
+        const executingItem = statusDiv.querySelector('.source-execution-item[style*="font-weight: bold"]');
+        if (executingItem) {
+          executingItem.querySelector('.execution-icon').innerHTML = '<i data-feather="x-circle"></i>';
+          if (window.feather) feather.replace();
+          executingItem.querySelector('.execution-status-text').textContent = 'Failed';
+          executingItem.style.color = 'var(--error)';
+          executingItem.style.fontWeight = 'normal';
+        }
+      }
+      
       progressModal.modalElement.querySelector('.modal-actions').innerHTML = `
         <button class="btn btn-primary" onclick="this.closest('.modal-overlay').remove()">Close</button>
       `;
-      showNotification('Sources executed but failed to create info package: ' + error.message, 'error');
+      
+      showNotification('Failed to execute query: ' + error.message, 'error');
     }
 
   } catch (error) {
@@ -1275,6 +1328,15 @@ window.viewPackageDetails = async (id) => {
   try {
     showLoading();
     const pkg = await api.getInfoPackage(id);
+    
+    // Load tags for the package
+    let tags = [];
+    try {
+      tags = await api.getInfoPackageTags(id);
+    } catch (error) {
+      console.error('Failed to load package tags:', error);
+    }
+    
     hideLoading();
     
     const data = typeof pkg.data === 'string' ? JSON.parse(pkg.data) : pkg.data;
@@ -1304,6 +1366,11 @@ window.viewPackageDetails = async (id) => {
                 </span>
               </div>
             </div>
+            ${tags && tags.length > 0 ? `
+              <div class="tags-container" style="margin-top: 1rem;">
+                ${renderTagBadges(tags)}
+              </div>
+            ` : ''}
           </div>
 
           <div class="detail-section">
@@ -1317,6 +1384,9 @@ window.viewPackageDetails = async (id) => {
               ${sources.map((source, index) => {
                 const resultData = source.result?.data || source.result;
                 const content = resultData?.content || 'No content available';
+                const shouldTruncate = content.length > 500;
+                const preview = shouldTruncate ? content.substring(0, 500) : content;
+                const uniqueId = `source-content-${index}`;
                 
                 return `
                   <div class="source-result ${source.status}">
@@ -1331,7 +1401,20 @@ window.viewPackageDetails = async (id) => {
                     </div>
                     <div class="source-result-content">
                       ${source.status === 'success' ? `
-                        <p>${escapeHtml(content).substring(0, 500)}${content.length > 500 ? '...' : ''}</p>
+                        <div class="content-wrapper">
+                          <div id="${uniqueId}-preview" style="${shouldTruncate ? '' : 'display: none;'}">
+                            <p>${escapeHtml(preview)}...</p>
+                          </div>
+                          <div id="${uniqueId}-full" style="${shouldTruncate ? 'display: none;' : ''}">
+                            <p style="white-space: pre-wrap;">${escapeHtml(content)}</p>
+                          </div>
+                          ${shouldTruncate ? `
+                            <button class="btn-sm btn-link" onclick="window.toggleSourceContent('${uniqueId}', this)">
+                              <span class="show-more">Show More</span>
+                              <span class="show-less" style="display: none;">Show Less</span>
+                            </button>
+                          ` : ''}
+                        </div>
                       ` : `
                         <p class="text-error">Error: ${escapeHtml(resultData?.error || 'Unknown error')}</p>
                       `}
@@ -1389,6 +1472,27 @@ window.deletePackage = async (id) => {
   } catch (error) {
     hideLoading();
     showNotification('Failed to delete package: ' + error.message, 'error');
+  }
+};
+
+window.toggleSourceContent = (uniqueId, button) => {
+  const previewDiv = document.getElementById(`${uniqueId}-preview`);
+  const fullDiv = document.getElementById(`${uniqueId}-full`);
+  const showMoreSpan = button.querySelector('.show-more');
+  const showLessSpan = button.querySelector('.show-less');
+  
+  if (previewDiv.style.display === 'none') {
+    // Currently showing full, switch to preview
+    previewDiv.style.display = '';
+    fullDiv.style.display = 'none';
+    showMoreSpan.style.display = '';
+    showLessSpan.style.display = 'none';
+  } else {
+    // Currently showing preview, switch to full
+    previewDiv.style.display = 'none';
+    fullDiv.style.display = '';
+    showMoreSpan.style.display = 'none';
+    showLessSpan.style.display = '';
   }
 };
 
@@ -1478,6 +1582,9 @@ window.executePackageWithAI = async (id) => {
   // Process in background without blocking UI
   try {
     const result = await api.processInfoPackage(id);
+    
+    // Dispatch event to refresh credit balance
+    document.dispatchEvent(new Event('ai-operation-complete'));
     
     // Remove processing state
     if (cardElement) {

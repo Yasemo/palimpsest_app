@@ -142,6 +142,10 @@ class API {
     return this.request('/api/ai/models');
   }
 
+  async getOpenRouterCredits() {
+    return this.request('/api/ai/credits');
+  }
+
   async processInfoPackage(packageId) {
     return this.request(`/api/ai/process/${packageId}`, {
       method: 'POST',
@@ -222,6 +226,51 @@ class API {
 
   async getOutputLogs(id, limit = 50) {
     return this.request(`/api/outputs/${id}/logs?limit=${limit}`);
+  }
+
+  // Tags
+  async getTags() {
+    return this.request('/api/tags');
+  }
+
+  async createTag(data) {
+    return this.request('/api/tags', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getQueryTags(queryId) {
+    return this.request(`/api/queries/${queryId}/tags`);
+  }
+
+  async setQueryTags(queryId, tagIds) {
+    return this.request(`/api/queries/${queryId}/tags`, {
+      method: 'POST',
+      body: JSON.stringify({ tag_ids: tagIds }),
+    });
+  }
+
+  async getInfoPackageTags(packageId) {
+    return this.request(`/api/info-packages/${packageId}/tags`);
+  }
+
+  async setInfoPackageTags(packageId, tagIds) {
+    return this.request(`/api/info-packages/${packageId}/tags`, {
+      method: 'POST',
+      body: JSON.stringify({ tag_ids: tagIds }),
+    });
+  }
+
+  async getContentTags(contentId) {
+    return this.request(`/api/content/${contentId}/tags`);
+  }
+
+  async setContentTags(contentId, tagIds) {
+    return this.request(`/api/content/${contentId}/tags`, {
+      method: 'POST',
+      body: JSON.stringify({ tag_ids: tagIds }),
+    });
   }
 
   // Integrations

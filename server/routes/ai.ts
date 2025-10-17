@@ -80,6 +80,21 @@ export async function handleAIRoutes(req: Request, pathname: string): Promise<Re
     }
   }
 
+  // GET /api/ai/credits - Get current OpenRouter credit balance
+  if (req.method === "GET" && pathParts.length === 3 && pathParts[2] === "credits") {
+    try {
+      const credits = await openrouterIntegration.getCredits();
+      return new Response(JSON.stringify(credits), {
+        headers: { "Content-Type": "application/json" },
+      });
+    } catch (error) {
+      return new Response(JSON.stringify({ error: (error as Error).message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  }
+
   // POST /api/ai/process/:packageId - Process an info package with AI
   if (req.method === "POST" && pathParts.length === 4 && pathParts[2] === "process") {
     try {
@@ -100,9 +115,18 @@ export async function handleAIRoutes(req: Request, pathname: string): Promise<Re
 
       const infoPackage = packageResult.rows[0] as any;
 
-      // Get AI config
+      // Get AI config with fallback to defaults
       const configResult = await db.query("SELECT * FROM ai_config WHERE id = 1");
-      const aiConfig = configResult.rows[0] as any;
+      const aiConfig = configResult.rows[0] as any || {
+        model: config.ai.defaultModel,
+        system_prompt: "You are a helpful AI assistant that processes information and creates well-structured content.",
+        temperature: 0.7
+      };
+
+      // Ensure model is set (fallback to env variable if not)
+      if (!aiConfig.model) {
+        aiConfig.model = config.ai.defaultModel;
+      }
 
       // Construct the user prompt with the info package data and directive
       const userPrompt = `${infoPackage.directive}\n\nHere is the data to work with:\n${JSON.stringify(infoPackage.data, null, 2)}`;
@@ -123,13 +147,31 @@ export async function handleAIRoutes(req: Request, pathname: string): Promise<Re
         [packageId, aiResponse.content, JSON.stringify([])]
       );
 
+      const content = contentResult.rows[0] as any;
+
+      // Copy tags from info package to content
+      const tagsResult = await db.query(
+        `SELECT tag_id FROM info_package_tags WHERE info_package_id = $1`,
+        [packageId]
+      );
+
+      if (tagsResult.rows.length > 0) {
+        const tagIds = tagsResult.rows.map((row: any) => row.tag_id);
+        const values = tagIds.map((_tagId: any, i: number) => `($1, $${i + 2})`).join(", ");
+        const params = [content.id, ...tagIds];
+        await db.query(
+          `INSERT INTO content_tags (content_id, tag_id) VALUES ${values}`,
+          params
+        );
+      }
+
       // Mark info package as processed
       await db.query(
         "UPDATE info_packages SET processed = true WHERE id = $1",
         [packageId]
       );
 
-      return new Response(JSON.stringify(contentResult.rows[0]), {
+      return new Response(JSON.stringify(content), {
         headers: { "Content-Type": "application/json" },
       });
     } catch (error) {

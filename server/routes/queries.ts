@@ -4,6 +4,128 @@ export async function handleQueriesRoutes(req: Request, pathname: string): Promi
   const url = new URL(req.url);
   const pathParts = pathname.split("/").filter(Boolean);
 
+  // GET /api/queries/:id/tags - Get tags for a query
+  if (req.method === "GET" && pathParts.length === 4 && pathParts[1] === "queries" && pathParts[3] === "tags") {
+    try {
+      const queryId = pathParts[2];
+      const result = await db.query(
+        `SELECT t.* FROM tags t
+         INNER JOIN query_tags qt ON t.id = qt.tag_id
+         WHERE qt.query_id = $1
+         ORDER BY t.name ASC`,
+        [queryId]
+      );
+
+      return new Response(JSON.stringify(result.rows), {
+        headers: { "Content-Type": "application/json" },
+      });
+    } catch (error) {
+      return new Response(JSON.stringify({ error: (error as Error).message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  }
+
+  // POST /api/queries/:id/tags - Set tags for a query
+  if (req.method === "POST" && pathParts.length === 4 && pathParts[1] === "queries" && pathParts[3] === "tags") {
+    try {
+      const queryId = pathParts[2];
+      const body = await req.json();
+      const { tag_ids } = body;
+
+      if (!Array.isArray(tag_ids)) {
+        return new Response(
+          JSON.stringify({ error: "tag_ids must be an array" }),
+          { status: 400, headers: { "Content-Type": "application/json" } }
+        );
+      }
+
+      // Delete existing tags
+      await db.query("DELETE FROM query_tags WHERE query_id = $1", [queryId]);
+
+      // Insert new tags
+      if (tag_ids.length > 0) {
+        const values = tag_ids.map((_tagId: any, i: number) => `($1, $${i + 2})`).join(", ");
+        const params = [queryId, ...tag_ids];
+        await db.query(
+          `INSERT INTO query_tags (query_id, tag_id) VALUES ${values}`,
+          params
+        );
+      }
+
+      return new Response(JSON.stringify({ success: true }), {
+        headers: { "Content-Type": "application/json" },
+      });
+    } catch (error) {
+      return new Response(JSON.stringify({ error: (error as Error).message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  }
+
+  // GET /api/info-packages/:id/tags - Get tags for an info package
+  if (req.method === "GET" && pathParts.length === 4 && pathParts[1] === "info-packages" && pathParts[3] === "tags") {
+    try {
+      const packageId = pathParts[2];
+      const result = await db.query(
+        `SELECT t.* FROM tags t
+         INNER JOIN info_package_tags ipt ON t.id = ipt.tag_id
+         WHERE ipt.info_package_id = $1
+         ORDER BY t.name ASC`,
+        [packageId]
+      );
+
+      return new Response(JSON.stringify(result.rows), {
+        headers: { "Content-Type": "application/json" },
+      });
+    } catch (error) {
+      return new Response(JSON.stringify({ error: (error as Error).message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  }
+
+  // POST /api/info-packages/:id/tags - Set tags for an info package
+  if (req.method === "POST" && pathParts.length === 4 && pathParts[1] === "info-packages" && pathParts[3] === "tags") {
+    try {
+      const packageId = pathParts[2];
+      const body = await req.json();
+      const { tag_ids } = body;
+
+      if (!Array.isArray(tag_ids)) {
+        return new Response(
+          JSON.stringify({ error: "tag_ids must be an array" }),
+          { status: 400, headers: { "Content-Type": "application/json" } }
+        );
+      }
+
+      // Delete existing tags
+      await db.query("DELETE FROM info_package_tags WHERE info_package_id = $1", [packageId]);
+
+      // Insert new tags
+      if (tag_ids.length > 0) {
+        const values = tag_ids.map((_tagId: any, i: number) => `($1, $${i + 2})`).join(", ");
+        const params = [packageId, ...tag_ids];
+        await db.query(
+          `INSERT INTO info_package_tags (info_package_id, tag_id) VALUES ${values}`,
+          params
+        );
+      }
+
+      return new Response(JSON.stringify({ success: true }), {
+        headers: { "Content-Type": "application/json" },
+      });
+    } catch (error) {
+      return new Response(JSON.stringify({ error: (error as Error).message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  }
+
   // GET /api/queries - List all queries
   if (req.method === "GET" && pathParts.length === 2 && pathParts[1] === "queries") {
     try {
@@ -286,7 +408,25 @@ export async function handleQueriesRoutes(req: Request, pathname: string): Promi
         [id, packageData, query.directive]
       );
 
-      return new Response(JSON.stringify(packageResult.rows[0]), {
+      const infoPackage = packageResult.rows[0] as any;
+
+      // Copy tags from query to info package
+      const tagsResult = await db.query(
+        `SELECT tag_id FROM query_tags WHERE query_id = $1`,
+        [id]
+      );
+
+      if (tagsResult.rows.length > 0) {
+        const tagIds = tagsResult.rows.map((row: any) => row.tag_id);
+        const values = tagIds.map((_tagId: any, i: number) => `($1, $${i + 2})`).join(", ");
+        const params = [infoPackage.id, ...tagIds];
+        await db.query(
+          `INSERT INTO info_package_tags (info_package_id, tag_id) VALUES ${values}`,
+          params
+        );
+      }
+
+      return new Response(JSON.stringify(infoPackage), {
         headers: { "Content-Type": "application/json" },
       });
     } catch (error) {
