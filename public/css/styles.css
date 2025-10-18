@@ -128,12 +128,12 @@ a:hover {
 .header-content {
   max-width: 1200px;
   margin: 0 auto;
-  padding: 1.5rem 2rem 0;
+  padding: 1.5rem 2rem 1rem;
 }
 
 .header-top {
   display: grid;
-  grid-template-columns: 50px 1fr 50px;
+  grid-template-columns: 100px 1fr 100px;
   align-items: center;
   margin-bottom: 1rem;
 }
@@ -143,8 +143,14 @@ a:hover {
   align-items: center;
 }
 
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .logo-image {
-  height: 80px;
+  height: 60px;
   width: auto;
 }
 
@@ -190,6 +196,33 @@ a:hover {
   background: var(--bg-tertiary);
   border-color: var(--border-medium);
   transform: scale(1.05);
+}
+
+/* Logout Button */
+.logout-btn {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+  color: var(--text-secondary);
+}
+
+.logout-btn:hover {
+  background: var(--error-bg);
+  border-color: var(--error);
+  color: var(--error);
+  transform: scale(1.05);
+}
+
+.logout-btn svg {
+  width: 20px;
+  height: 20px;
 }
 
 .theme-icon {

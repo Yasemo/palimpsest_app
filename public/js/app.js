@@ -8,6 +8,74 @@ import { renderAI } from './components/ai.js';
 import { renderContent } from './components/content.js';
 import { renderOutputs } from './components/outputs.js';
 
+// Check authentication on app load
+async function checkAuthentication() {
+  const token = localStorage.getItem('auth_token');
+  
+  // If no token, redirect to login
+  if (!token) {
+    window.location.href = '/login.html';
+    return false;
+  }
+
+  // Verify token is still valid
+  try {
+    const response = await fetch('/api/auth/verify', {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    const data = await response.json();
+    
+    if (!data.valid) {
+      localStorage.removeItem('auth_token');
+      localStorage.removeItem('auth_username');
+      window.location.href = '/login.html';
+      return false;
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('Auth verification failed:', error);
+    localStorage.removeItem('auth_token');
+    localStorage.removeItem('auth_username');
+    window.location.href = '/login.html';
+    return false;
+  }
+}
+
+// Logout function
+function logout() {
+  if (confirm('Are you sure you want to log out?')) {
+    localStorage.removeItem('auth_token');
+    localStorage.removeItem('auth_username');
+    window.location.href = '/login.html';
+  }
+}
+
+// Initialize logout button
+function initializeLogoutButton() {
+  const headerControlsDiv = document.querySelector('.header-controls');
+  if (!headerControlsDiv) return;
+
+  // Create logout button
+  const logoutBtn = document.createElement('button');
+  logoutBtn.className = 'logout-btn';
+  logoutBtn.setAttribute('aria-label', 'Logout');
+  logoutBtn.title = 'Logout';
+  logoutBtn.innerHTML = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+      <polyline points="16 17 21 12 16 7"></polyline>
+      <line x1="21" y1="12" x2="9" y2="12"></line>
+    </svg>
+  `;
+  logoutBtn.addEventListener('click', logout);
+  
+  // Add to header controls after theme toggle
+  headerControlsDiv.appendChild(logoutBtn);
+}
+
 // Register routes
 router.register('/integrations', renderIntegrations);
 router.register('/sources', renderSources);
@@ -91,8 +159,16 @@ document.addEventListener('ai-operation-complete', () => {
   updateCreditBalance();
 });
 
-// Initialize credit balance on page load
-document.addEventListener('DOMContentLoaded', () => {
+// Initialize app on page load
+document.addEventListener('DOMContentLoaded', async () => {
+  // Check authentication first
+  const isAuthenticated = await checkAuthentication();
+  if (!isAuthenticated) {
+    return; // Will redirect to login
+  }
+  
+  // Initialize UI components
+  initializeLogoutButton();
   initializeCreditBalance();
 });
 

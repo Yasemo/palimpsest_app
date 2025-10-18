@@ -113,17 +113,26 @@ export class Modal {
 
     const formData = new FormData(form);
     const data = {};
+    
+    // First, collect all non-checkbox form data
     for (const [key, value] of formData.entries()) {
-      // Handle checkboxes
       const input = form.querySelector(`[name="${key}"]`);
       if (input && input.type === 'checkbox') {
-        data[key] = input.checked;
+        // Skip checkboxes here - we'll handle them separately
+        continue;
       } else if (input && input.type === 'number') {
         data[key] = parseFloat(value) || 0;
       } else {
         data[key] = value;
       }
     }
+    
+    // Explicitly handle ALL checkboxes (checked or unchecked)
+    const checkboxes = form.querySelectorAll('input[type="checkbox"][name]');
+    checkboxes.forEach(checkbox => {
+      data[checkbox.name] = checkbox.checked;
+    });
+    
     return data;
   }
 

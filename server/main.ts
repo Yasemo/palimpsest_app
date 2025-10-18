@@ -6,7 +6,13 @@ import { handleAIRoutes } from "./routes/ai.ts";
 import { handleContentRoutes } from "./routes/content.ts";
 import { handleOutputsRoutes } from "./routes/outputs.ts";
 import { handleTagsRoutes } from "./routes/tags.ts";
+import { handleAuthRoutes } from "./routes/auth.ts";
+import { requireAuth, requireWebhookAuth } from "./middleware/auth.ts";
 import { startLocalScheduler } from "./schedulers/local.ts";
+import { 
+  handleQueriesExecution, 
+  handleOutputsExecution 
+} from "./schedulers/cloud.ts";
 import { perplexityIntegration } from "./integrations/perplexity.ts";
 import { airtableIntegration } from "./integrations/airtable.ts";
 import { openrouterIntegration } from "./integrations/openrouter.ts";
@@ -58,57 +64,46 @@ async function handler(req: Request): Promise<Response> {
   }
 
   try {
-    // API routes
-    if (pathname.startsWith("/api/sources") || pathname.startsWith("/api/integrations")) {
-      const response = await handleSourcesRoutes(req, pathname);
+    // Auth routes (public - no authentication required)
+    if (pathname.startsWith("/api/auth")) {
+      const response = await handleAuthRoutes(req, pathname);
       Object.entries(corsHeaders).forEach(([key, value]) => {
         response.headers.set(key, value);
       });
       return response;
     }
 
-    if (pathname.startsWith("/api/queries") || pathname.startsWith("/api/info-packages")) {
-      const response = await handleQueriesRoutes(req, pathname);
-      Object.entries(corsHeaders).forEach(([key, value]) => {
-        response.headers.set(key, value);
+    // Webhook endpoints for Google Cloud Scheduler (bearer token auth)
+    if (pathname === "/webhooks/execute-queries" && req.method === "POST") {
+      const authError = requireWebhookAuth(req);
+      if (authError) return authError;
+      
+      const result = await handleQueriesExecution();
+      const response = new Response(JSON.stringify(result), {
+        status: result.success ? 200 : 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
       });
       return response;
     }
 
-    if (pathname.startsWith("/api/ai")) {
-      const response = await handleAIRoutes(req, pathname);
-      Object.entries(corsHeaders).forEach(([key, value]) => {
-        response.headers.set(key, value);
+    if (pathname === "/webhooks/execute-outputs" && req.method === "POST") {
+      const authError = requireWebhookAuth(req);
+      if (authError) return authError;
+      
+      const result = await handleOutputsExecution();
+      const response = new Response(JSON.stringify(result), {
+        status: result.success ? 200 : 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
       });
       return response;
     }
 
-    if (pathname.startsWith("/api/content")) {
-      const response = await handleContentRoutes(req, pathname);
-      Object.entries(corsHeaders).forEach(([key, value]) => {
-        response.headers.set(key, value);
-      });
-      return response;
-    }
-
-    if (pathname.startsWith("/api/outputs")) {
-      const response = await handleOutputsRoutes(req, pathname);
-      Object.entries(corsHeaders).forEach(([key, value]) => {
-        response.headers.set(key, value);
-      });
-      return response;
-    }
-
-    if (pathname.startsWith("/api/tags")) {
-      const response = await handleTagsRoutes(req, pathname);
-      Object.entries(corsHeaders).forEach(([key, value]) => {
-        response.headers.set(key, value);
-      });
-      return response;
-    }
-
-    // Integration status endpoint
+    // Protected API routes - require authentication
+    // Integration status endpoint (must be checked BEFORE general /api/integrations routing)
     if (pathname === "/api/integrations/status" && req.method === "GET") {
+      const authError = await requireAuth(req);
+      if (authError) return authError;
+      
       const status = {
         perplexity: await perplexityIntegration.validate(),
         airtable: await airtableIntegration.validate(),
@@ -121,35 +116,69 @@ async function handler(req: Request): Promise<Response> {
       return response;
     }
 
-    // Webhook endpoints for Google Cloud Scheduler (production)
-    if (pathname === "/webhooks/execute-sources" && req.method === "POST") {
-      // Trigger source execution
-      const response = new Response(JSON.stringify({ message: "Source execution triggered" }), {
-        headers: { "Content-Type": "application/json", ...corsHeaders },
+    // API routes with authentication
+    if (pathname.startsWith("/api/sources") || pathname.startsWith("/api/integrations")) {
+      const authError = await requireAuth(req);
+      if (authError) return authError;
+      
+      const response = await handleSourcesRoutes(req, pathname);
+      Object.entries(corsHeaders).forEach(([key, value]) => {
+        response.headers.set(key, value);
       });
       return response;
     }
 
-    if (pathname === "/webhooks/execute-queries" && req.method === "POST") {
-      // Trigger query execution
-      const response = new Response(JSON.stringify({ message: "Query execution triggered" }), {
-        headers: { "Content-Type": "application/json", ...corsHeaders },
+    if (pathname.startsWith("/api/queries") || pathname.startsWith("/api/info-packages")) {
+      const authError = await requireAuth(req);
+      if (authError) return authError;
+      
+      const response = await handleQueriesRoutes(req, pathname);
+      Object.entries(corsHeaders).forEach(([key, value]) => {
+        response.headers.set(key, value);
       });
       return response;
     }
 
-    if (pathname === "/webhooks/process-packages" && req.method === "POST") {
-      // Trigger package processing
-      const response = new Response(JSON.stringify({ message: "Package processing triggered" }), {
-        headers: { "Content-Type": "application/json", ...corsHeaders },
+    if (pathname.startsWith("/api/ai")) {
+      const authError = await requireAuth(req);
+      if (authError) return authError;
+      
+      const response = await handleAIRoutes(req, pathname);
+      Object.entries(corsHeaders).forEach(([key, value]) => {
+        response.headers.set(key, value);
       });
       return response;
     }
 
-    if (pathname === "/webhooks/execute-outputs" && req.method === "POST") {
-      // Trigger output execution
-      const response = new Response(JSON.stringify({ message: "Output execution triggered" }), {
-        headers: { "Content-Type": "application/json", ...corsHeaders },
+    if (pathname.startsWith("/api/content")) {
+      const authError = await requireAuth(req);
+      if (authError) return authError;
+      
+      const response = await handleContentRoutes(req, pathname);
+      Object.entries(corsHeaders).forEach(([key, value]) => {
+        response.headers.set(key, value);
+      });
+      return response;
+    }
+
+    if (pathname.startsWith("/api/outputs")) {
+      const authError = await requireAuth(req);
+      if (authError) return authError;
+      
+      const response = await handleOutputsRoutes(req, pathname);
+      Object.entries(corsHeaders).forEach(([key, value]) => {
+        response.headers.set(key, value);
+      });
+      return response;
+    }
+
+    if (pathname.startsWith("/api/tags")) {
+      const authError = await requireAuth(req);
+      if (authError) return authError;
+      
+      const response = await handleTagsRoutes(req, pathname);
+      Object.entries(corsHeaders).forEach(([key, value]) => {
+        response.headers.set(key, value);
       });
       return response;
     }

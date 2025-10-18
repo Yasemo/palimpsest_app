@@ -27,6 +27,15 @@ export const config = {
     environment: Deno.env.get("ENVIRONMENT") || "local",
     port: parseInt(Deno.env.get("PORT") || "8000"),
   },
+  auth: {
+    username: Deno.env.get("AUTH_USERNAME") || "",
+    password: Deno.env.get("AUTH_PASSWORD") || "",
+    jwtSecret: Deno.env.get("JWT_SECRET") || "",
+    jwtExpiryHours: parseInt(Deno.env.get("JWT_EXPIRY_HOURS") || "24"),
+  },
+  webhook: {
+    secret: Deno.env.get("WEBHOOK_SECRET") || "",
+  },
 };
 
 // Validate required configuration
@@ -36,6 +45,14 @@ export function validateConfig(): { valid: boolean; missing: string[] } {
   if (!config.database.url) missing.push("DATABASE_URL");
   if (!config.perplexity.apiKey) missing.push("PERPLEXITY_API_KEY");
   if (!config.openrouter.apiKey) missing.push("OPENROUTER_API_KEY");
+  
+  // Auth is required in production
+  if (config.server.environment === "production") {
+    if (!config.auth.username) missing.push("AUTH_USERNAME");
+    if (!config.auth.password) missing.push("AUTH_PASSWORD");
+    if (!config.auth.jwtSecret) missing.push("JWT_SECRET");
+    if (!config.webhook.secret) missing.push("WEBHOOK_SECRET");
+  }
 
   return {
     valid: missing.length === 0,

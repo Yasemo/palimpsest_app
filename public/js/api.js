@@ -4,6 +4,10 @@ const API_BASE_URL = window.location.origin;
 class API {
   async request(endpoint, options = {}) {
     const url = `${API_BASE_URL}${endpoint}`;
+    
+    // Get auth token from localStorage
+    const token = localStorage.getItem('auth_token');
+    
     const config = {
       headers: {
         'Content-Type': 'application/json',
@@ -12,11 +16,24 @@ class API {
       ...options,
     };
 
+    // Add Authorization header if token exists
+    if (token) {
+      config.headers['Authorization'] = `Bearer ${token}`;
+    }
+
     try {
       const response = await fetch(url, config);
 
       // Check response status first before trying to parse JSON
       if (!response.ok) {
+        // Handle 401 Unauthorized - redirect to login
+        if (response.status === 401) {
+          localStorage.removeItem('auth_token');
+          localStorage.removeItem('auth_username');
+          window.location.href = '/login.html';
+          return;
+        }
+
         let errorMsg = `Request failed with status ${response.status}`;
         try {
           const errorData = await response.json();

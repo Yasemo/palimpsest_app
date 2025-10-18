@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Palimpsest</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cookie&family=Libre+Franklin:wght@400;500;600;700&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/css/styles.css">
+    <style>
+        .login-page {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+            background: var(--bg-primary);
+        }
+
+        .login-container {
+            width: 100%;
+            max-width: 450px;
+        }
+
+        .login-branding {
+            text-align: center;
+            margin-bottom: 3rem;
+        }
+
+        .login-logo {
+            max-width: 250px;
+            height: auto;
+            margin: 0 auto 1rem;
+            display: block;
+        }
+
+        .login-tagline {
+            font-family: var(--font-sans);
+            color: var(--text-tertiary);
+            font-size: 0.95rem;
+            font-weight: 400;
+            letter-spacing: 0.3px;
+        }
+
+        .login-box {
+            background: var(--bg-primary);
+            border: 1px solid var(--border-light);
+            padding: 2.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .login-header {
+            text-align: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1.5rem;
+            border-bottom: 1px solid var(--border-light);
+        }
+
+        .login-header h1 {
+            font-size: 1.75rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 0.5rem;
+        }
+
+        .login-header p {
+            font-family: var(--font-sans);
+            color: var(--text-tertiary);
+            font-size: 0.95rem;
+        }
+
+        .login-form {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .error-message {
+            background: var(--error-bg);
+            border: 1px solid var(--error);
+            color: var(--error);
+            padding: 1rem;
+            text-align: center;
+            font-family: var(--font-sans);
+            font-size: 0.95rem;
+            margin-bottom: 1rem;
+            display: none;
+        }
+
+        .error-message.show {
+            display: block;
+        }
+
+        .login-form .form-group {
+            margin-bottom: 0;
+        }
+
+        .login-form label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            font-family: var(--font-sans);
+            font-size: 0.875rem;
+            letter-spacing: 0.3px;
+        }
+
+        .login-form input {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid var(--border-medium);
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-size: 1rem;
+            font-family: var(--font-serif);
+            transition: border-color 0.2s ease;
+        }
+
+        .login-form input:focus {
+            outline: none;
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 0 3px rgba(50, 104, 145, 0.1);
+        }
+
+        .login-button {
+            width: 100%;
+            padding: 0.875rem 1.5rem;
+            background: var(--text-primary);
+            color: var(--bg-primary);
+            border: 1px solid var(--text-primary);
+            border-radius: 2px;
+            cursor: pointer;
+            font-size: 0.875rem;
+            font-weight: 600;
+            font-family: var(--font-sans);
+            transition: all 0.2s ease;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            margin-top: 0.5rem;
+        }
+
+        .login-button:hover {
+            background: var(--text-secondary);
+            border-color: var(--text-secondary);
+        }
+
+        .login-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .loading-state {
+            display: none;
+            text-align: center;
+            padding: 1.5rem;
+            color: var(--text-tertiary);
+            font-family: var(--font-sans);
+        }
+
+        .loading-state.show {
+            display: block;
+        }
+
+        .spinner {
+            width: 30px;
+            height: 30px;
+            border: 3px solid var(--border-light);
+            border-top-color: var(--text-primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 1rem;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        @media (max-width: 768px) {
+            .login-logo {
+                max-width: 200px;
+            }
+
+            .login-box {
+                padding: 2rem 1.5rem;
+            }
+        }
+    </style>
+</head>
+<body class="dark-mode">
+    <div class="login-page">
+        <div class="login-container">
+            <div class="login-branding">
+                <img src="/assets/palimpsest_log_white.png" alt="Palimpsest" class="login-logo">
+                <!-- <div class="login-tagline">AI-Powered Research & Content Creation</div> -->
+            </div>
+
+            <div class="login-box">
+                <div class="login-header">
+                    <h1>Welcome Back</h1>
+                    <p>Sign in to access your dashboard</p>
+                </div>
+
+                <div id="error-message" class="error-message"></div>
+
+                <form id="login-form" class="login-form">
+                    <div class="form-group">
+                        <label for="username">Username</label>
+                        <input 
+                            type="text" 
+                            id="username" 
+                            name="username" 
+                            required 
+                            autocomplete="username"
+                            autofocus
+                        >
+                    </div>
+
+                    <div class="form-group">
+                        <label for="password">Password</label>
+                        <input 
+                            type="password" 
+                            id="password" 
+                            name="password" 
+                            required 
+                            autocomplete="current-password"
+                        >
+                    </div>
+
+                    <button type="submit" class="login-button" id="login-button">
+                        Sign In
+                    </button>
+                </form>
+
+                <div class="loading-state" id="loading-state">
+                    <div class="spinner"></div>
+                    <p>Signing in...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const loginForm = document.getElementById('login-form');
+        const loginButton = document.getElementById('login-button');
+        const errorMessage = document.getElementById('error-message');
+        const loadingState = document.getElementById('loading-state');
+
+        // Check if already logged in
+        const token = localStorage.getItem('auth_token');
+        if (token) {
+            // Verify token is still valid
+            fetch('/api/auth/verify', {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.valid) {
+                    window.location.href = '/';
+                } else {
+                    localStorage.removeItem('auth_token');
+                    localStorage.removeItem('auth_username');
+                }
+            })
+            .catch(() => {
+                localStorage.removeItem('auth_token');
+                localStorage.removeItem('auth_username');
+            });
+        }
+
+        loginForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+
+            // Show loading state
+            loginForm.style.display = 'none';
+            loadingState.classList.add('show');
+            errorMessage.classList.remove('show');
+
+            try {
+                const response = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ username, password })
+                });
+
+                const data = await response.json();
+
+                if (data.success && data.token) {
+                    // Store token
+                    localStorage.setItem('auth_token', data.token);
+                    localStorage.setItem('auth_username', data.username);
+
+                    // Redirect to main app
+                    window.location.href = '/';
+                } else {
+                    // Show error
+                    errorMessage.textContent = data.error || 'Invalid credentials. Please try again.';
+                    errorMessage.classList.add('show');
+                    loginForm.style.display = 'flex';
+                    loadingState.classList.remove('show');
+                }
+            } catch (error) {
+                errorMessage.textContent = 'Connection error. Please try again.';
+                errorMessage.classList.add('show');
+                loginForm.style.display = 'flex';
+                loadingState.classList.remove('show');
+            }
+        });
+    </script>
+</body>
+</html>
