@@ -31,6 +31,16 @@ export async function renderIntegrations() {
           <p class="config-note">Configure via environment variables</p>
         </div>
 
+        <div class="integration-card ${status.airtable ? 'connected' : 'disconnected'}">
+          <h3>Airtable</h3>
+          <p>Query structured data from Airtable bases</p>
+          <div class="status-indicator">
+            <span class="status-dot"></span>
+            ${status.airtable ? 'Connected' : 'Not Configured'}
+          </div>
+          <p class="config-note">Configure via environment variables</p>
+        </div>
+
         <div class="integration-card ${status.openrouter ? 'connected' : 'disconnected'}">
           <h3>OpenRouter</h3>
           <p>Access to multiple LLM providers</p>
@@ -57,6 +67,7 @@ export async function renderIntegrations() {
         <p>Integrations are configured via environment variables in your .env file:</p>
         <ul>
           <li><code>PERPLEXITY_API_KEY</code> - Your Perplexity API key</li>
+          <li><code>AIRTABLE_API_KEY</code> - Your Airtable personal access token</li>
           <li><code>OPENROUTER_API_KEY</code> - Your OpenRouter API key</li>
           <li><code>GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN, GMAIL_USER_EMAIL</code> - Gmail OAuth credentials</li>
         </ul>

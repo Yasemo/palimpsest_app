@@ -7,6 +7,9 @@ export const config = {
   perplexity: {
     apiKey: Deno.env.get("PERPLEXITY_API_KEY") || "",
   },
+  airtable: {
+    apiKey: Deno.env.get("AIRTABLE_API_KEY") || "",
+  },
   openrouter: {
     apiKey: Deno.env.get("OPENROUTER_API_KEY") || "",
   },

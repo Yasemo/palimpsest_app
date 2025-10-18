@@ -8,6 +8,7 @@ import { handleOutputsRoutes } from "./routes/outputs.ts";
 import { handleTagsRoutes } from "./routes/tags.ts";
 import { startLocalScheduler } from "./schedulers/local.ts";
 import { perplexityIntegration } from "./integrations/perplexity.ts";
+import { airtableIntegration } from "./integrations/airtable.ts";
 import { openrouterIntegration } from "./integrations/openrouter.ts";
 import { gmailIntegration } from "./integrations/gmail.ts";
 import { runMigrations } from "./db/migrate.ts";
@@ -58,7 +59,7 @@ async function handler(req: Request): Promise<Response> {
 
   try {
     // API routes
-    if (pathname.startsWith("/api/sources")) {
+    if (pathname.startsWith("/api/sources") || pathname.startsWith("/api/integrations")) {
       const response = await handleSourcesRoutes(req, pathname);
       Object.entries(corsHeaders).forEach(([key, value]) => {
         response.headers.set(key, value);
@@ -110,6 +111,7 @@ async function handler(req: Request): Promise<Response> {
     if (pathname === "/api/integrations/status" && req.method === "GET") {
       const status = {
         perplexity: await perplexityIntegration.validate(),
+        airtable: await airtableIntegration.validate(),
         openrouter: await openrouterIntegration.validate(),
         gmail: await gmailIntegration.validate(),
       };

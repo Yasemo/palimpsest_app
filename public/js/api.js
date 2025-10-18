@@ -76,6 +76,19 @@ class API {
     return this.request(`/api/sources/${id}/results?limit=${limit}`);
   }
 
+  // Airtable Integration
+  async getAirtableBases() {
+    return this.request('/api/integrations/airtable/bases');
+  }
+
+  async getAirtableTables(baseId) {
+    return this.request(`/api/integrations/airtable/bases/${baseId}/tables`);
+  }
+
+  async getAirtableTableSchema(baseId, tableId) {
+    return this.request(`/api/integrations/airtable/bases/${baseId}/tables/${tableId}/schema`);
+  }
+
   // Queries
   async getQueries() {
     return this.request('/api/queries');

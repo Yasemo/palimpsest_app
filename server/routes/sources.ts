@@ -1,5 +1,6 @@
 import { db } from "../db/client.ts";
 import { perplexityIntegration } from "../integrations/perplexity.ts";
+import { airtableIntegration } from "../integrations/airtable.ts";
 
 export async function handleSourcesRoutes(req: Request, pathname: string): Promise<Response> {
   const url = new URL(req.url);
@@ -168,6 +169,8 @@ export async function handleSourcesRoutes(req: Request, pathname: string): Promi
         // Execute based on source type
         if (source.type === "perplexity") {
           integrationResult = await perplexityIntegration.execute(source.config);
+        } else if (source.type === "airtable") {
+          integrationResult = await airtableIntegration.execute(source.config);
         } else {
           throw new Error(`Unknown source type: ${source.type}`);
         }
@@ -220,6 +223,58 @@ export async function handleSourcesRoutes(req: Request, pathname: string): Promi
       );
 
       return new Response(JSON.stringify(result.rows), {
+        headers: { "Content-Type": "application/json" },
+      });
+    } catch (error) {
+      return new Response(JSON.stringify({ error: (error as Error).message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  }
+
+  // GET /api/integrations/airtable/bases - List Airtable bases
+  if (req.method === "GET" && pathname === "/api/integrations/airtable/bases") {
+    try {
+      const bases = await airtableIntegration.listBases();
+      return new Response(JSON.stringify(bases), {
+        headers: { "Content-Type": "application/json" },
+      });
+    } catch (error) {
+      return new Response(JSON.stringify({ error: (error as Error).message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  }
+
+  // GET /api/integrations/airtable/bases/:baseId/tables - List tables in a base
+  if (req.method === "GET" && pathParts[1] === "integrations" && 
+      pathParts[2] === "airtable" && pathParts[3] === "bases" && 
+      pathParts[5] === "tables" && pathParts.length === 6) {
+    try {
+      const baseId = pathParts[4];
+      const tables = await airtableIntegration.listTables(baseId);
+      return new Response(JSON.stringify(tables), {
+        headers: { "Content-Type": "application/json" },
+      });
+    } catch (error) {
+      return new Response(JSON.stringify({ error: (error as Error).message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  }
+
+  // GET /api/integrations/airtable/bases/:baseId/tables/:tableId/schema - Get table schema
+  if (req.method === "GET" && pathParts[1] === "integrations" && 
+      pathParts[2] === "airtable" && pathParts[3] === "bases" && 
+      pathParts[5] === "tables" && pathParts[7] === "schema" && pathParts.length === 8) {
+    try {
+      const baseId = pathParts[4];
+      const tableId = pathParts[6];
+      const schema = await airtableIntegration.getTableSchema(baseId, tableId);
+      return new Response(JSON.stringify(schema), {
         headers: { "Content-Type": "application/json" },
       });
     } catch (error) {
